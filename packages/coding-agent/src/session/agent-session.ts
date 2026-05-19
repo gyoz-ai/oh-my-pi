@@ -35,11 +35,7 @@ import {
 	type CompactionPreparation,
 	type CompactionResult,
 	calculateContextTokens,
-	calculatePromptTokens,
-	collectEntriesForBranchSummary,
 	compact,
-	estimateTokens,
-	generateBranchSummary,
 	generateHandoff,
 	prepareCompaction,
 	type SummaryOptions,
@@ -60,7 +56,6 @@ import type {
 	TextContent,
 	ToolCall,
 	ToolChoice,
-	Usage,
 	UsageReport,
 } from "@oh-my-pi/pi-ai";
 import {
@@ -75,14 +70,7 @@ import {
 	streamSimple,
 } from "@oh-my-pi/pi-ai";
 import { MacOSPowerAssertion } from "@oh-my-pi/pi-natives";
-import {
-	getAgentDbPath,
-	isEnoent,
-	isUnexpectedSocketCloseMessage,
-	logger,
-	prompt,
-	Snowflake,
-} from "@oh-my-pi/pi-utils";
+import { getAgentDbPath, isEnoent, isUnexpectedSocketCloseMessage, logger, prompt } from "@oh-my-pi/pi-utils";
 import { type AsyncJob, type AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
 import type { Rule } from "../capability/rule";
@@ -100,13 +88,8 @@ import type { Settings, SkillsSettings } from "../config/settings";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability } from "../discovery";
 import { expandApplyPatchToEntries, normalizeDiff, normalizeToLF, ParseError, previewPatch, stripBom } from "../edit";
-import {
-	disposeKernelSessionsByOwner,
-	executePython as executePythonCommand,
-	type PythonResult,
-} from "../eval/py/executor";
-import { type BashResult, executeBash as executeBashCommand } from "../exec/bash-executor";
-import { exportSessionToHtml } from "../export/html";
+import type { PythonResult } from "../eval/py/executor";
+import type { BashResult } from "../exec/bash-executor";
 import type { TtsrManager, TtsrMatchContext } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
@@ -118,14 +101,11 @@ import type {
 	MessageEndEvent,
 	MessageStartEvent,
 	MessageUpdateEvent,
-	SessionBeforeBranchResult,
 	SessionBeforeCompactResult,
 	SessionBeforeSwitchResult,
-	SessionBeforeTreeResult,
 	ToolExecutionEndEvent,
 	ToolExecutionStartEvent,
 	ToolExecutionUpdateEvent,
-	TreePreparation,
 	TurnEndEvent,
 	TurnStartEvent,
 } from "../extensibility/extensions";
@@ -147,7 +127,7 @@ import {
 	selectDiscoverableMCPToolNamesByServer,
 } from "../mcp/discoverable-tool-metadata";
 import { resolveMemoryBackend } from "../memory-backend";
-import { getCurrentThemeName, theme } from "../modes/theme/theme";
+import { theme } from "../modes/theme/theme";
 import type { PlanModeState } from "../plan-mode/state";
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import eagerTodoPrompt from "../prompts/system/eager-todo.md" with { type: "text" };
@@ -171,30 +151,31 @@ import {
 } from "../tool-discovery/tool-index";
 import { assertEditableFile } from "../tools/auto-generated-guard";
 import type { CheckpointState } from "../tools/checkpoint";
-import { outputMeta } from "../tools/output-meta";
 import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
 import { getLatestTodoPhasesFromEntries, type TodoItem, type TodoPhase } from "../tools/todo-write";
 import { ToolAbortError, ToolError } from "../tools/tool-errors";
-import { clampTimeout } from "../tools/tool-timeouts";
 import { parseCommandArgs } from "../utils/command-args";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import type { AuthStorage } from "./auth-storage";
+import { BashController } from "./bash-controller";
 import type { ClientBridge, ClientBridgePermissionOption, ClientBridgePermissionOutcome } from "./client-bridge";
+import { type CustomMessage, convertToLlm, readPendingDisplayTag, SILENT_ABORT_MARKER } from "./messages";
+import { PythonController } from "./python-controller";
 import {
-	type BashExecutionMessage,
-	type CompactionSummaryMessage,
-	type CustomMessage,
-	convertToLlm,
-	type FileMentionMessage,
-	type PythonExecutionMessage,
-	readPendingDisplayTag,
-	SILENT_ABORT_MARKER,
-} from "./messages";
-import { formatSessionDumpText } from "./session-dump-format";
+	calculateSessionContextUsage,
+	calculateSessionStats,
+	exportSessionHtml,
+	formatCompactConversationContext,
+	formatSessionText,
+	getLastAssistantText as getLastAssistantTextFromMessages,
+	getLastVisibleHandoffText as getLastVisibleHandoffTextFromMessages,
+	hasCopyCandidateAssistantMessage as hasCopyCandidateAssistantMessageInMessages,
+	type SessionStats,
+} from "./session-inspection";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -204,6 +185,7 @@ import type {
 } from "./session-manager";
 import { getLatestCompactionEntry } from "./session-manager";
 import { ToolChoiceQueue } from "./tool-choice-queue";
+import { TreeNavigator } from "./tree-navigator";
 
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
@@ -373,25 +355,7 @@ export interface RoleModelCycleResult {
 	role: string;
 }
 
-/** Session statistics for /session command */
-export interface SessionStats {
-	sessionFile: string | undefined;
-	sessionId: string;
-	userMessages: number;
-	assistantMessages: number;
-	toolCalls: number;
-	toolResults: number;
-	totalMessages: number;
-	tokens: {
-		input: number;
-		output: number;
-		cacheRead: number;
-		cacheWrite: number;
-		total: number;
-	};
-	premiumRequests: number;
-	cost: number;
-}
+export type { SessionStats };
 
 /** Internal marker for hook messages queued through the agent loop */
 // ============================================================================
@@ -742,8 +706,8 @@ export class AgentSession {
 	#compactionAbortController: AbortController | undefined = undefined;
 	#autoCompactionAbortController: AbortController | undefined = undefined;
 
-	// Branch summarization state
-	#branchSummaryAbortController: AbortController | undefined = undefined;
+	// Tree navigation (branch + leaf nav, owns its summary abort controller)
+	#treeNavigator!: TreeNavigator;
 
 	// Handoff state
 	#handoffAbortController: AbortController | undefined = undefined;
@@ -761,21 +725,14 @@ export class AgentSession {
 	#todoClearTimers = new Map<string, Timer>();
 	#toolChoiceQueue = new ToolChoiceQueue();
 
-	// Bash execution state
-	#bashAbortControllers = new Set<AbortController>();
-	#pendingBashMessages: BashExecutionMessage[] = [];
-
-	// Python execution state
-	#evalAbortControllers = new Set<AbortController>();
-	#evalKernelOwnerId: string;
+	// Bash and Python execution subsystems (constructed in the constructor)
+	#bashController!: BashController;
+	#pythonController!: PythonController;
 	/**
 	 * AsyncJobManager owned by this session (top-level only). Subagents leave
 	 * this undefined and **MUST NOT** dispose the global instance on teardown.
 	 */
 	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
-	#pendingPythonMessages: PythonExecutionMessage[] = [];
-	#activeEvalExecutions = new Set<Promise<unknown>>();
-	#evalExecutionDisposing = false;
 
 	// Background-channel IRC exchanges queued while the recipient was streaming.
 	// Drained into history (via emitExternalEvent) once the recipient becomes idle.
@@ -956,7 +913,7 @@ export class AgentSession {
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
 		// Power assertions are taken per turn (see #beginInFlight); nothing acquired here.
-		this.#evalKernelOwnerId = config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`;
+		const session: AgentSession = this;
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
 		this.#scopedModels = config.scopedModels ?? [];
 		this.#thinkingLevel = config.thinkingLevel;
@@ -1079,6 +1036,77 @@ export class AgentSession {
 					},
 					{ deliverAs: message.deliverAs },
 				);
+			},
+		});
+
+		this.#bashController = new BashController({
+			sessionManager: this.sessionManager,
+			settings: this.settings,
+			agent: this.agent,
+			get extensionRunner() {
+				return session.#extensionRunner;
+			},
+			get sessionId() {
+				return session.sessionId;
+			},
+			get isStreaming() {
+				return session.isStreaming;
+			},
+		});
+		this.#pythonController = new PythonController(
+			{
+				sessionManager: this.sessionManager,
+				settings: this.settings,
+				agent: this.agent,
+				get extensionRunner() {
+					return session.#extensionRunner;
+				},
+				get isStreaming() {
+					return session.isStreaming;
+				},
+			},
+			config.evalKernelOwnerId,
+		);
+		this.#treeNavigator = new TreeNavigator({
+			sessionManager: this.sessionManager,
+			settings: this.settings,
+			modelRegistry: this.#modelRegistry,
+			agent: this.agent,
+			get model() {
+				return session.model;
+			},
+			get sessionId() {
+				return session.sessionId;
+			},
+			get obfuscator() {
+				return session.#obfuscator;
+			},
+			get extensionRunner() {
+				return session.#extensionRunner;
+			},
+			prepareBranch: async () => {
+				session.#pendingNextTurnMessages = [];
+				session.#scheduledHiddenNextTurnGeneration = undefined;
+				await session.sessionManager.flush();
+				session.#cancelOwnAsyncJobs();
+			},
+			onBranchSessionCreated: () => {
+				session.#syncTodoPhasesFromBranch();
+				session.#syncAgentSessionId();
+				session.#rekeyHindsightMemoryForCurrentSessionId();
+				session.#resetHindsightConversationTrackingIfHindsight();
+			},
+			afterHistoryRewrite: async (context, opts) => {
+				await session.#restoreMCPSelectionsForSessionContext(context);
+				if (opts.replaceMessages) {
+					session.agent.replaceMessages(context.messages);
+				}
+				if (opts.syncTodos) {
+					session.#syncTodoPhasesFromBranch();
+				}
+				if (opts.replaceMessages) {
+					session.#closeCodexProviderSessionsForHistoryRewrite();
+				}
 			},
 		});
 
@@ -2691,7 +2719,7 @@ export class AgentSession {
 	async dispose(): Promise<void> {
 		this.#isDisposed = true;
 		this.#pendingBackgroundExchanges = [];
-		this.#evalExecutionDisposing = true;
+		this.#pythonController.markDisposing();
 		try {
 			if (this.#extensionRunner?.hasHandlers("session_shutdown")) {
 				await this.#extensionRunner.emit({ type: "session_shutdown" });
@@ -2717,13 +2745,12 @@ export class AgentSession {
 				AsyncJobManager.setInstance(undefined);
 			}
 		}
-		const pythonExecutionsSettled = await this.#prepareEvalExecutionsForDispose();
+		const pythonExecutionsSettled = await this.#pythonController.dispose();
 		if (!pythonExecutionsSettled) {
 			logger.warn(
 				"Detaching retained Python kernel ownership during dispose while Python execution is still active",
 			);
 		}
-		await disposeKernelSessionsByOwner(this.#evalKernelOwnerId);
 		this.#releasePowerAssertion();
 		await this.sessionManager.close();
 		this.#closeAllProviderSessions("dispose");
@@ -3976,8 +4003,8 @@ export class AgentSession {
 		const generation = this.#promptGeneration;
 		try {
 			// Flush any pending bash messages before the new prompt
-			this.#flushPendingBashMessages();
-			this.#flushPendingPythonMessages();
+			this.#bashController.flushPending();
+			this.#pythonController.flushPending();
 			this.#flushPendingBackgroundExchanges();
 
 			// Reset todo reminder count on new user prompt
@@ -5448,11 +5475,9 @@ export class AgentSession {
 		await this.#runAutoCompaction("idle", false, true);
 	}
 
-	/**
-	 * Cancel in-progress branch summarization.
-	 */
+	/** Cancel in-progress branch summarization. */
 	abortBranchSummary(): void {
-		this.#branchSummaryAbortController?.abort();
+		this.#treeNavigator.abortBranchSummary();
 	}
 
 	/**
@@ -7185,301 +7210,74 @@ export class AgentSession {
 	}
 
 	// =========================================================================
-	// Bash Execution
+	// Bash Execution (delegated to BashController)
 	// =========================================================================
 
-	async #saveBashOriginalArtifact(originalText: string): Promise<string | undefined> {
-		try {
-			return await this.sessionManager.saveArtifact(originalText, "bash-original");
-		} catch {
-			return undefined;
-		}
+	/**
+	 * Execute a bash command. Adds the result to agent context and session
+	 * history (honoring the `user_bash` extension hook when registered).
+	 */
+	executeBash(command: string, onChunk?: (chunk: string) => void, options?: { excludeFromContext?: boolean }) {
+		return this.#bashController.execute(command, onChunk, options);
 	}
 
-	/**
-	 * Execute a bash command.
-	 * Adds result to agent context and session.
-	 * @param command The bash command to execute
-	 * @param onChunk Optional streaming callback for output
-	 * @param options.excludeFromContext If true, command output won't be sent to LLM (!! prefix)
-	 */
-	async executeBash(
-		command: string,
-		onChunk?: (chunk: string) => void,
-		options?: { excludeFromContext?: boolean },
-	): Promise<BashResult> {
-		const excludeFromContext = options?.excludeFromContext === true;
-		const cwd = this.sessionManager.getCwd();
-
-		if (this.#extensionRunner?.hasHandlers("user_bash")) {
-			const hookResult = await this.#extensionRunner.emitUserBash({
-				type: "user_bash",
-				command,
-				excludeFromContext,
-				cwd,
-			});
-			if (hookResult?.result) {
-				this.recordBashResult(command, hookResult.result, options);
-				return hookResult.result;
-			}
-		}
-
-		const abortController = new AbortController();
-		this.#bashAbortControllers.add(abortController);
-
-		try {
-			const result = await executeBashCommand(command, {
-				onChunk,
-				signal: abortController.signal,
-				sessionKey: this.sessionId,
-				timeout: clampTimeout("bash") * 1000,
-				onMinimizedSave: originalText => this.#saveBashOriginalArtifact(originalText),
-			});
-
-			this.recordBashResult(command, result, options);
-			return result;
-		} finally {
-			this.#bashAbortControllers.delete(abortController);
-		}
-	}
-
-	/**
-	 * Record a bash execution result in session history.
-	 * Used by executeBash and by extensions that handle bash execution themselves.
-	 */
+	/** Record a bash result captured by an extension that owns dispatch. */
 	recordBashResult(command: string, result: BashResult, options?: { excludeFromContext?: boolean }): void {
-		const meta = outputMeta().truncationFromSummary(result, { direction: "tail" }).get();
-		const bashMessage: BashExecutionMessage = {
-			role: "bashExecution",
-			command,
-			output: result.output,
-			exitCode: result.exitCode,
-			cancelled: result.cancelled,
-			truncated: result.truncated,
-			meta,
-			timestamp: Date.now(),
-			excludeFromContext: options?.excludeFromContext,
-		};
-
-		// If agent is streaming, defer adding to avoid breaking tool_use/tool_result ordering
-		if (this.isStreaming) {
-			// Queue for later - will be flushed on agent_end
-			this.#pendingBashMessages.push(bashMessage);
-		} else {
-			// Add to agent state immediately
-			this.agent.appendMessage(bashMessage);
-
-			// Save to session
-			this.sessionManager.appendMessage(bashMessage);
-		}
+		this.#bashController.record(command, result, options);
 	}
 
-	/**
-	 * Cancel running bash command.
-	 */
+	/** Cancel every running bash invocation. */
 	abortBash(): void {
-		for (const abortController of this.#bashAbortControllers) {
-			abortController.abort();
-		}
+		this.#bashController.abort();
 	}
 
-	/** Whether a bash command is currently running */
 	get isBashRunning(): boolean {
-		return this.#bashAbortControllers.size > 0;
+		return this.#bashController.isRunning;
 	}
 
-	/** Whether there are pending bash messages waiting to be flushed */
 	get hasPendingBashMessages(): boolean {
-		return this.#pendingBashMessages.length > 0;
-	}
-
-	/**
-	 * Flush pending bash messages to agent state and session.
-	 * Called after agent turn completes to maintain proper message ordering.
-	 */
-	#flushPendingBashMessages(): void {
-		if (this.#pendingBashMessages.length === 0) return;
-
-		for (const bashMessage of this.#pendingBashMessages) {
-			// Add to agent state
-			this.agent.appendMessage(bashMessage);
-
-			// Save to session
-			this.sessionManager.appendMessage(bashMessage);
-		}
-
-		this.#pendingBashMessages = [];
+		return this.#bashController.hasPendingMessages;
 	}
 
 	// =========================================================================
-	// User-Initiated Python Execution
+	// User-Initiated Python Execution (delegated to PythonController)
 	// =========================================================================
 
 	/**
-	 * Execute Python code in the shared kernel.
-	 * Uses the same kernel session as eval's Python backend, allowing collaborative editing.
-	 * @param code The Python code to execute
-	 * @param onChunk Optional streaming callback for output
-	 * @param options.excludeFromContext If true, execution won't be sent to LLM ($$ prefix)
+	 * Execute Python code in the shared kernel (mirrors eval's Python backend).
+	 * Honors the `user_python` extension hook when registered.
 	 */
-	async executePython(
-		code: string,
-		onChunk?: (chunk: string) => void,
-		options?: { excludeFromContext?: boolean },
-	): Promise<PythonResult> {
-		const excludeFromContext = options?.excludeFromContext === true;
-		const cwd = this.sessionManager.getCwd();
-		this.assertEvalExecutionAllowed();
-
-		const abortController = new AbortController();
-		const execution = (async (): Promise<PythonResult> => {
-			if (this.#extensionRunner?.hasHandlers("user_python")) {
-				const hookResult = await this.#extensionRunner.emitUserPython({
-					type: "user_python",
-					code,
-					excludeFromContext,
-					cwd,
-				});
-				this.assertEvalExecutionAllowed();
-				if (hookResult?.result) {
-					this.recordPythonResult(code, hookResult.result, options);
-					return hookResult.result;
-				}
-			}
-
-			// Use the same session ID as eval's Python backend for kernel sharing
-			const sessionFile = this.sessionManager.getSessionFile();
-			const sessionId = sessionFile ? `session:${sessionFile}:cwd:${cwd}` : `cwd:${cwd}`;
-			const result = await executePythonCommand(code, {
-				cwd,
-				sessionId,
-				kernelOwnerId: this.#evalKernelOwnerId,
-				kernelMode: this.settings.get("python.kernelMode"),
-				onChunk,
-				signal: abortController.signal,
-			});
-			this.recordPythonResult(code, result, options);
-			return result;
-		})();
-		return await this.trackEvalExecution(execution, abortController);
+	executePython(code: string, onChunk?: (chunk: string) => void, options?: { excludeFromContext?: boolean }) {
+		return this.#pythonController.execute(code, onChunk, options);
 	}
 
+	/** Throw if new Python work is no longer accepted (dispose underway). */
 	assertEvalExecutionAllowed(): void {
-		if (this.#evalExecutionDisposing) {
-			throw new Error("Python execution is unavailable while session disposal is in progress");
-		}
+		this.#pythonController.assertExecutionAllowed();
 	}
 
-	/**
-	 * Track Python work started outside AgentSession.executePython so dispose can await and abort it too.
-	 */
+	/** Track a Python execution started outside `executePython` so dispose awaits it. */
 	trackEvalExecution<T>(execution: Promise<T>, abortController: AbortController): Promise<T> {
-		this.#evalAbortControllers.add(abortController);
-		this.#activeEvalExecutions.add(execution);
-		void execution.then(
-			() => {
-				this.#evalAbortControllers.delete(abortController);
-				this.#activeEvalExecutions.delete(execution);
-			},
-			() => {
-				this.#evalAbortControllers.delete(abortController);
-				this.#activeEvalExecutions.delete(execution);
-			},
-		);
-		return execution;
+		return this.#pythonController.trackExecution(execution, abortController);
 	}
 
-	/**
-	 * Record a Python execution result in session history.
-	 */
+	/** Record a Python result captured by an extension that owns dispatch. */
 	recordPythonResult(code: string, result: PythonResult, options?: { excludeFromContext?: boolean }): void {
-		const meta = outputMeta().truncationFromSummary(result, { direction: "tail" }).get();
-		const pythonMessage: PythonExecutionMessage = {
-			role: "pythonExecution",
-			code,
-			output: result.output,
-			exitCode: result.exitCode,
-			cancelled: result.cancelled,
-			truncated: result.truncated,
-			meta,
-			timestamp: Date.now(),
-			excludeFromContext: options?.excludeFromContext,
-		};
-
-		// If agent is streaming, defer adding to avoid breaking tool_use/tool_result ordering
-		if (this.isStreaming) {
-			this.#pendingPythonMessages.push(pythonMessage);
-		} else {
-			this.agent.appendMessage(pythonMessage);
-			this.sessionManager.appendMessage(pythonMessage);
-		}
+		this.#pythonController.record(code, result, options);
 	}
 
-	/**
-	 * Cancel running Python execution.
-	 */
+	/** Cancel every running Python execution. */
 	abortEval(): void {
-		for (const abortController of this.#evalAbortControllers) {
-			abortController.abort();
-		}
+		this.#pythonController.abort();
 	}
 
-	async #waitForEvalExecutionsToSettle(timeoutMs: number): Promise<boolean> {
-		const deadline = Date.now() + timeoutMs;
-		while (this.#activeEvalExecutions.size > 0) {
-			const remainingMs = deadline - Date.now();
-			if (remainingMs <= 0) {
-				return false;
-			}
-			const settled = await Promise.race([
-				Promise.allSettled(Array.from(this.#activeEvalExecutions)).then(() => true),
-				Bun.sleep(remainingMs).then(() => false),
-			]);
-			if (!settled && this.#activeEvalExecutions.size > 0) {
-				return false;
-			}
-		}
-		return true;
-	}
-
-	async #prepareEvalExecutionsForDispose(): Promise<boolean> {
-		if (!(await this.#waitForEvalExecutionsToSettle(3_000))) {
-			logger.warn("Aborting active Python execution during dispose before retained kernel cleanup");
-			this.abortEval();
-			if (!(await this.#waitForEvalExecutionsToSettle(1_000))) {
-				logger.warn(
-					"Python execution is still active after dispose aborted all active runs; retained kernel ownership will still be detached",
-				);
-				return false;
-			}
-		}
-		return true;
-	}
-
-	/** Whether a Python execution is currently running */
 	get isEvalRunning(): boolean {
-		return this.#evalAbortControllers.size > 0;
+		return this.#pythonController.isRunning;
 	}
 
-	/** Whether there are pending Python messages waiting to be flushed */
 	get hasPendingPythonMessages(): boolean {
-		return this.#pendingPythonMessages.length > 0;
+		return this.#pythonController.hasPendingMessages;
 	}
-
-	/**
-	 * Flush pending Python messages to agent state and session.
-	 */
-	#flushPendingPythonMessages(): void {
-		if (this.#pendingPythonMessages.length === 0) return;
-
-		for (const pythonMessage of this.#pendingPythonMessages) {
-			this.agent.appendMessage(pythonMessage);
-			this.sessionManager.appendMessage(pythonMessage);
-		}
-
-		this.#pendingPythonMessages = [];
-	}
-
 	// =========================================================================
 	// Background-Channel IRC Exchanges
 	// =========================================================================
@@ -7937,98 +7735,25 @@ export class AgentSession {
 		}
 	}
 
+	// =========================================================================
+	// Tree Navigation (delegated to TreeNavigator)
+	// =========================================================================
+
 	/**
-	 * Create a branch from a specific entry.
-	 * Emits before_branch/branch session events to hooks.
-	 *
-	 * @param entryId ID of the entry to branch from
-	 * @returns Object with:
-	 *   - selectedText: The text of the selected user message (for editor pre-fill)
-	 *   - cancelled: True if a hook cancelled the branch
+	 * Create a branch from a specific user-message entry, forking into a new
+	 * session file. Emits `session_before_branch` and `session_branch` hooks.
 	 */
-	async branch(entryId: string): Promise<{
-		selectedText: string;
-		cancelled: boolean;
-	}> {
-		const previousSessionFile = this.sessionFile;
-		const selectedEntry = this.sessionManager.getEntry(entryId);
-
-		if (!selectedEntry || selectedEntry.type !== "message" || selectedEntry.message.role !== "user") {
-			throw new Error("Invalid entry ID for branching");
-		}
-
-		const selectedText = this.#extractUserMessageText(selectedEntry.message.content);
-
-		let skipConversationRestore = false;
-
-		// Emit session_before_branch event (can be cancelled)
-		if (this.#extensionRunner?.hasHandlers("session_before_branch")) {
-			const result = (await this.#extensionRunner.emit({
-				type: "session_before_branch",
-				entryId,
-			})) as SessionBeforeBranchResult | undefined;
-
-			if (result?.cancel) {
-				return { selectedText, cancelled: true };
-			}
-			skipConversationRestore = result?.skipConversationRestore ?? false;
-		}
-
-		// Clear pending messages (bound to old session state)
-		this.#pendingNextTurnMessages = [];
-		this.#scheduledHiddenNextTurnGeneration = undefined;
-
-		// Flush pending writes before branching
-		await this.sessionManager.flush();
-		this.#cancelOwnAsyncJobs();
-
-		if (!selectedEntry.parentId) {
-			await this.sessionManager.newSession({ parentSession: previousSessionFile });
-		} else {
-			this.sessionManager.createBranchedSession(selectedEntry.parentId);
-		}
-		this.#syncTodoPhasesFromBranch();
-		this.#syncAgentSessionId();
-		this.#rekeyHindsightMemoryForCurrentSessionId();
-		this.#resetHindsightConversationTrackingIfHindsight();
-
-		// Reload messages from entries (works for both file and in-memory mode)
-		const sessionContext = this.buildDisplaySessionContext();
-
-		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
-
-		// Emit session_branch event to hooks (after branch completes)
-		if (this.#extensionRunner) {
-			await this.#extensionRunner.emit({
-				type: "session_branch",
-				previousSessionFile,
-			});
-		}
-
-		if (!skipConversationRestore) {
-			this.agent.replaceMessages(sessionContext.messages);
-			this.#closeCodexProviderSessionsForHistoryRewrite();
-		}
-
-		return { selectedText, cancelled: false };
+	branch(entryId: string): Promise<{ selectedText: string; cancelled: boolean }> {
+		return this.#treeNavigator.branch(entryId);
 	}
 
-	// =========================================================================
-	// Tree Navigation
-	// =========================================================================
-
 	/**
-	 * Navigate to a different node in the session tree.
-	 * Unlike branch() which creates a new session file, this stays in the same file.
-	 *
-	 * @param targetId The entry ID to navigate to
-	 * @param options.summarize Whether user wants to summarize abandoned branch
-	 * @param options.customInstructions Custom instructions for summarizer
-	 * @returns Result with editorText (if user message) and cancelled status
+	 * Navigate to a different leaf within the current session file. Optionally
+	 * generates a branch summary for the abandoned path.
 	 */
-	async navigateTree(
+	navigateTree(
 		targetId: string,
-		options: { summarize?: boolean; customInstructions?: string } = {},
+		options?: { summarize?: boolean; customInstructions?: string },
 	): Promise<{
 		editorText?: string;
 		cancelled: boolean;
@@ -8037,314 +7762,34 @@ export class AgentSession {
 		/** Raw session context built during navigation — pass to renderInitialMessages to skip a second O(N) walk. */
 		sessionContext?: SessionContext;
 	}> {
-		const oldLeafId = this.sessionManager.getLeafId();
-
-		// No-op if already at target
-		if (targetId === oldLeafId) {
-			return { cancelled: false };
-		}
-
-		// Model required for summarization
-		if (options.summarize && !this.model) {
-			throw new Error("No model available for summarization");
-		}
-
-		const targetEntry = this.sessionManager.getEntry(targetId);
-		if (!targetEntry) {
-			throw new Error(`Entry ${targetId} not found`);
-		}
-
-		// Collect entries to summarize (from old leaf to common ancestor)
-		const { entries: entriesToSummarize, commonAncestorId } = collectEntriesForBranchSummary(
-			this.sessionManager,
-			oldLeafId,
-			targetId,
-		);
-
-		// Prepare event data
-		const preparation: TreePreparation = {
-			targetId,
-			oldLeafId,
-			commonAncestorId,
-			entriesToSummarize,
-			userWantsSummary: options.summarize ?? false,
-		};
-
-		// Set up abort controller for summarization
-		this.#branchSummaryAbortController = new AbortController();
-		let hookSummary: { summary: string; details?: unknown } | undefined;
-		let fromExtension = false;
-
-		// Emit session_before_tree event
-		if (this.#extensionRunner?.hasHandlers("session_before_tree")) {
-			const result = (await this.#extensionRunner.emit({
-				type: "session_before_tree",
-				preparation,
-				signal: this.#branchSummaryAbortController.signal,
-			})) as SessionBeforeTreeResult | undefined;
-
-			if (result?.cancel) {
-				return { cancelled: true };
-			}
-
-			if (result?.summary && options.summarize) {
-				hookSummary = result.summary;
-				fromExtension = true;
-			}
-		}
-
-		// Run default summarizer if needed
-		let summaryText: string | undefined;
-		let summaryDetails: unknown;
-		if (options.summarize && entriesToSummarize.length > 0 && !hookSummary) {
-			const model = this.model!;
-			const apiKey = await this.#modelRegistry.getApiKey(model, this.sessionId);
-			if (!apiKey) {
-				throw new Error(`No API key for ${model.provider}`);
-			}
-			const branchSummarySettings = this.settings.getGroup("branchSummary");
-			const result = await generateBranchSummary(entriesToSummarize, {
-				model,
-				apiKey,
-				signal: this.#branchSummaryAbortController.signal,
-				customInstructions: options.customInstructions,
-				reserveTokens: branchSummarySettings.reserveTokens,
-				metadata: this.agent.metadataForProvider(model.provider),
-				convertToLlm,
-				telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
-			});
-			this.#branchSummaryAbortController = undefined;
-			if (result.aborted) {
-				return { cancelled: true, aborted: true };
-			}
-			if (result.error) {
-				throw new Error(result.error);
-			}
-			summaryText = result.summary;
-			summaryDetails = {
-				readFiles: result.readFiles || [],
-				modifiedFiles: result.modifiedFiles || [],
-			};
-		} else if (hookSummary) {
-			summaryText = hookSummary.summary;
-			summaryDetails = hookSummary.details;
-		}
-
-		// Determine the new leaf position based on target type
-		let newLeafId: string | null;
-		let editorText: string | undefined;
-
-		if (targetEntry.type === "message" && targetEntry.message.role === "user") {
-			// User message: leaf = parent (null if root), text goes to editor
-			newLeafId = targetEntry.parentId;
-			editorText = this.#extractUserMessageText(targetEntry.message.content);
-		} else if (targetEntry.type === "custom_message") {
-			// Custom message: leaf = parent (null if root), text goes to editor
-			newLeafId = targetEntry.parentId;
-			editorText =
-				typeof targetEntry.content === "string"
-					? targetEntry.content
-					: targetEntry.content
-							.filter((c): c is { type: "text"; text: string } => c.type === "text")
-							.map(c => c.text)
-							.join("");
-		} else {
-			// Non-user message: leaf = selected node
-			newLeafId = targetId;
-		}
-
-		// Switch leaf (with or without summary)
-		// Summary is attached at the navigation target position (newLeafId), not the old branch
-		let summaryEntry: BranchSummaryEntry | undefined;
-		if (summaryText) {
-			// Create summary at target position (can be null for root)
-			const summaryId = this.sessionManager.branchWithSummary(newLeafId, summaryText, summaryDetails, fromExtension);
-			summaryEntry = this.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
-		} else if (newLeafId === null) {
-			// No summary, navigating to root - reset leaf
-			this.sessionManager.resetLeaf();
-		} else {
-			// No summary, navigating to non-root
-			this.sessionManager.branch(newLeafId);
-		}
-
-		// Update agent state — build display context to populate agent messages.
-		const stateContext = this.sessionManager.buildSessionContext();
-		const displayContext = deobfuscateSessionContext(stateContext, this.#obfuscator);
-		await this.#restoreMCPSelectionsForSessionContext(displayContext);
-		this.agent.replaceMessages(displayContext.messages);
-		this.#syncTodoPhasesFromBranch();
-		this.#closeCodexProviderSessionsForHistoryRewrite();
-
-		this.#branchSummaryAbortController = undefined;
-
-		// Emit session_tree event; only handlers can mutate session entries, so skip
-		// the emit and the context rebuild when no handlers are registered (mirrors
-		// the session_before_tree guard above).
-		if (this.#extensionRunner?.hasHandlers("session_tree")) {
-			await this.#extensionRunner.emit({
-				type: "session_tree",
-				newLeafId: this.sessionManager.getLeafId(),
-				oldLeafId,
-				summaryEntry,
-				fromExtension: summaryText ? fromExtension : undefined,
-			});
-			const rawContext = this.sessionManager.buildSessionContext();
-			return { editorText, cancelled: false, summaryEntry, sessionContext: rawContext };
-		}
-		return { editorText, cancelled: false, summaryEntry, sessionContext: stateContext };
+		return this.#treeNavigator.navigateTree(targetId, options);
 	}
 
-	/**
-	 * Get all user messages from session for branch selector.
-	 */
+	/** All user-message entries in the current branch (for the branch selector UI). */
 	getUserMessagesForBranching(): Array<{ entryId: string; text: string }> {
-		const entries = this.sessionManager.getEntries();
-		const result: Array<{ entryId: string; text: string }> = [];
-
-		for (const entry of entries) {
-			if (entry.type !== "message") continue;
-			if (entry.message.role !== "user") continue;
-
-			const text = this.#extractUserMessageText(entry.message.content);
-			if (text) {
-				result.push({ entryId: entry.id, text });
-			}
-		}
-
-		return result;
+		return this.#treeNavigator.getUserMessagesForBranching();
 	}
 
-	#extractUserMessageText(content: string | Array<{ type: string; text?: string }>): string {
-		if (typeof content === "string") return content;
-		if (Array.isArray(content)) {
-			return content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map(c => c.text)
-				.join("");
-		}
-		return "";
-	}
+	// =========================================================================
+	// Session Inspection (delegated to session-inspection)
+	// =========================================================================
 
-	/**
-	 * Get session statistics.
-	 */
+	/** Aggregate per-turn token / cost stats for the current branch. */
 	getSessionStats(): SessionStats {
-		const state = this.state;
-		const userMessages = state.messages.filter(m => m.role === "user").length;
-		const assistantMessages = state.messages.filter(m => m.role === "assistant").length;
-		const toolResults = state.messages.filter(m => m.role === "toolResult").length;
-
-		let toolCalls = 0;
-		let totalInput = 0;
-		let totalOutput = 0;
-		let totalCacheRead = 0;
-		let totalCacheWrite = 0;
-		let totalCost = 0;
-
-		let totalPremiumRequests = 0;
-		const getTaskToolUsage = (details: unknown): Usage | undefined => {
-			if (!details || typeof details !== "object") return undefined;
-			const record = details as Record<string, unknown>;
-			const usage = record.usage;
-			if (!usage || typeof usage !== "object") return undefined;
-			return usage as Usage;
-		};
-
-		for (const message of state.messages) {
-			if (message.role === "assistant") {
-				const assistantMsg = message as AssistantMessage;
-				toolCalls += assistantMsg.content.filter(c => c.type === "toolCall").length;
-				totalInput += assistantMsg.usage.input;
-				totalOutput += assistantMsg.usage.output;
-				totalCacheRead += assistantMsg.usage.cacheRead;
-				totalCacheWrite += assistantMsg.usage.cacheWrite;
-				totalPremiumRequests += assistantMsg.usage.premiumRequests ?? 0;
-				totalCost += assistantMsg.usage.cost.total;
-			}
-
-			if (message.role === "toolResult" && message.toolName === "task") {
-				const usage = getTaskToolUsage(message.details);
-				if (usage) {
-					totalInput += usage.input;
-					totalOutput += usage.output;
-					totalCacheRead += usage.cacheRead;
-					totalCacheWrite += usage.cacheWrite;
-					totalPremiumRequests += usage.premiumRequests ?? 0;
-					totalCost += usage.cost.total;
-				}
-			}
-		}
-
-		return {
+		return calculateSessionStats({
+			messages: this.state.messages,
 			sessionFile: this.sessionFile,
 			sessionId: this.sessionId,
-			userMessages,
-			assistantMessages,
-			toolCalls,
-			toolResults,
-			totalMessages: state.messages.length,
-			tokens: {
-				input: totalInput,
-				output: totalOutput,
-				cacheRead: totalCacheRead,
-				cacheWrite: totalCacheWrite,
-				total: totalInput + totalOutput + totalCacheRead + totalCacheWrite,
-			},
-			cost: totalCost,
-			premiumRequests: totalPremiumRequests,
-		};
+		});
 	}
 
-	/**
-	 * Get current context usage statistics.
-	 * Uses the last assistant message's usage data when available,
-	 * otherwise estimates tokens for all messages.
-	 */
+	/** Current branch context usage, or `undefined` when the model has no context window. */
 	getContextUsage(): ContextUsage | undefined {
-		const model = this.model;
-		if (!model) return undefined;
-
-		const contextWindow = model.contextWindow ?? 0;
-		if (contextWindow <= 0) return undefined;
-
-		// After compaction, the last assistant usage reflects pre-compaction context size.
-		// We can only trust usage from an assistant that responded after the latest compaction.
-		// If no such assistant exists, context token count is unknown until the next LLM response.
-		const branchEntries = this.sessionManager.getBranch();
-		const latestCompaction = getLatestCompactionEntry(branchEntries);
-
-		if (latestCompaction) {
-			// Check if there's a valid assistant usage after the compaction boundary
-			const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
-			let hasPostCompactionUsage = false;
-			for (let i = branchEntries.length - 1; i > compactionIndex; i--) {
-				const entry = branchEntries[i];
-				if (entry.type === "message" && entry.message.role === "assistant") {
-					const assistant = entry.message;
-					if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error") {
-						const contextTokens = calculateContextTokens(assistant.usage);
-						if (contextTokens > 0) {
-							hasPostCompactionUsage = true;
-						}
-						break;
-					}
-				}
-			}
-
-			if (!hasPostCompactionUsage) {
-				return { tokens: null, contextWindow, percent: null };
-			}
-		}
-
-		const estimate = this.#estimateContextTokens();
-		const percent = (estimate.tokens / contextWindow) * 100;
-
-		return {
-			tokens: estimate.tokens,
-			contextWindow,
-			percent,
-		};
+		return calculateSessionContextUsage({
+			model: this.model,
+			branchEntries: this.sessionManager.getBranch(),
+			messages: this.messages,
+		});
 	}
 
 	async fetchUsageReports(signal?: AbortSignal): Promise<UsageReport[] | null> {
@@ -8356,130 +7801,27 @@ export class AgentSession {
 		});
 	}
 
-	/**
-	 * Estimate context tokens from messages, using the last assistant usage when available.
-	 */
-	#estimateContextTokens(): {
-		tokens: number;
-	} {
-		const messages = this.messages;
-
-		// Find last assistant message with usage
-		let lastUsageIndex: number | null = null;
-		let lastUsage: Usage | undefined;
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const msg = messages[i];
-			if (msg.role === "assistant") {
-				const assistantMsg = msg as AssistantMessage;
-				if (assistantMsg.usage) {
-					lastUsage = assistantMsg.usage;
-					lastUsageIndex = i;
-					break;
-				}
-			}
-		}
-
-		if (!lastUsage || lastUsageIndex === null) {
-			// No usage data - estimate all messages
-			let estimated = 0;
-			for (const message of messages) {
-				estimated += estimateTokens(message);
-			}
-			return {
-				tokens: estimated,
-			};
-		}
-
-		const usageTokens = calculatePromptTokens(lastUsage);
-		let trailingTokens = 0;
-		for (let i = lastUsageIndex + 1; i < messages.length; i++) {
-			trailingTokens += estimateTokens(messages[i]);
-		}
-
-		return {
-			tokens: usageTokens + trailingTokens,
-		};
-	}
-
-	/**
-	 * Export session to HTML.
-	 * @param outputPath Optional output path (defaults to session directory)
-	 * @returns Path to exported file
-	 */
-	async exportToHtml(outputPath?: string): Promise<string> {
-		const themeName = getCurrentThemeName();
-		return exportSessionToHtml(this.sessionManager, this.state, { outputPath, themeName });
+	/** Export the current session to a static HTML viewer. */
+	exportToHtml(outputPath?: string): Promise<string> {
+		return exportSessionHtml(this.sessionManager, this.state, outputPath);
 	}
 
 	// =========================================================================
-	// Utilities
+	// Utilities (delegated to session-inspection)
 	// =========================================================================
 
-	/**
-	 * Get text content of last assistant message.
-	 * Useful for /copy command.
-	 * @returns Text content, or undefined if no assistant message exists
-	 */
+	/** Text content of the most recent copy-eligible assistant message. */
 	getLastAssistantText(): string | undefined {
-		const lastAssistant = this.#getLastCopyCandidateAssistantMessage();
-		if (!lastAssistant) return undefined;
-
-		let text = "";
-		for (const content of lastAssistant.content) {
-			if (content.type === "text") {
-				text += content.text;
-			}
-		}
-
-		return text.trim() || undefined;
+		return getLastAssistantTextFromMessages(this.messages);
 	}
 
 	hasCopyCandidateAssistantMessage(): boolean {
-		return this.#getLastCopyCandidateAssistantMessage() !== undefined;
+		return hasCopyCandidateAssistantMessageInMessages(this.messages);
 	}
 
-	#getLastCopyCandidateAssistantMessage(): AssistantMessage | undefined {
-		for (let i = this.messages.length - 1; i >= 0; i--) {
-			const message = this.messages[i];
-			if (message.role !== "assistant") continue;
-
-			const assistantMessage = message as AssistantMessage;
-			// Skip aborted messages with no content
-			if (assistantMessage.stopReason === "aborted" && assistantMessage.content.length === 0) continue;
-
-			return assistantMessage;
-		}
-
-		return undefined;
-	}
-	/**
-	 * Get text content of the most recent visible handoff message.
-	 * Fresh handoff sessions store the handoff context as a custom message, not
-	 * an assistant message, so callers that copy the "last" message can use this
-	 * as a fallback before the new session has an assistant response.
-	 */
+	/** Text content of the most recent visible handoff custom message. */
 	getLastVisibleHandoffText(): string | undefined {
-		for (let i = this.messages.length - 1; i >= 0; i--) {
-			const message = this.messages[i];
-			if (message.role !== "custom") continue;
-
-			const customMessage = message as CustomMessage;
-			if (customMessage.customType !== "handoff" || !customMessage.display) continue;
-
-			if (typeof customMessage.content === "string") {
-				return customMessage.content.trim() || undefined;
-			}
-
-			let text = "";
-			for (const content of customMessage.content) {
-				if (content.type === "text") {
-					text += content.text;
-				}
-			}
-			return text.trim() || undefined;
-		}
-
-		return undefined;
+		return getLastVisibleHandoffTextFromMessages(this.messages);
 	}
 
 	/**
@@ -8487,7 +7829,7 @@ export class AgentSession {
 	 * Includes user messages, assistant text, thinking blocks, tool calls, and tool results.
 	 */
 	formatSessionAsText(): string {
-		return formatSessionDumpText({
+		return formatSessionText({
 			messages: this.messages,
 			systemPrompt: this.agent.state.systemPrompt,
 			model: this.agent.state.model,
@@ -8496,67 +7838,9 @@ export class AgentSession {
 		});
 	}
 
-	/**
-	 * Format the conversation as compact context for subagents.
-	 * Includes only user messages and assistant text responses.
-	 * Excludes: system prompt, tool definitions, tool calls/results, thinking blocks.
-	 */
+	/** Compact subagent-facing summary (user/assistant text + summarized history). */
 	formatCompactContext(): string {
-		const lines: string[] = [];
-		lines.push("# Conversation Context");
-		lines.push("");
-		lines.push(
-			"This is a summary of the parent conversation. Read this if you need additional context about what was discussed or decided.",
-		);
-		lines.push("");
-
-		for (const msg of this.messages) {
-			if (msg.role === "user" || msg.role === "developer") {
-				lines.push(msg.role === "developer" ? "## Developer" : "## User");
-				lines.push("");
-				if (typeof msg.content === "string") {
-					lines.push(msg.content);
-				} else {
-					for (const c of msg.content) {
-						if (c.type === "text") {
-							lines.push(c.text);
-						} else if (c.type === "image") {
-							lines.push("[Image attached]");
-						}
-					}
-				}
-				lines.push("");
-			} else if (msg.role === "assistant") {
-				const assistantMsg = msg as AssistantMessage;
-				// Only include text content, skip tool calls and thinking
-				const textParts: string[] = [];
-				for (const c of assistantMsg.content) {
-					if (c.type === "text" && c.text.trim()) {
-						textParts.push(c.text);
-					}
-				}
-				if (textParts.length > 0) {
-					lines.push("## Assistant");
-					lines.push("");
-					lines.push(textParts.join("\n\n"));
-					lines.push("");
-				}
-			} else if (msg.role === "fileMention") {
-				const fileMsg = msg as FileMentionMessage;
-				const paths = fileMsg.files.map(f => f.path).join(", ");
-				lines.push(`[Files referenced: ${paths}]`);
-				lines.push("");
-			} else if (msg.role === "compactionSummary") {
-				const compactMsg = msg as CompactionSummaryMessage;
-				lines.push("## Earlier Context (Summarized)");
-				lines.push("");
-				lines.push(compactMsg.summary);
-				lines.push("");
-			}
-			// Skip: toolResult, bashExecution, pythonExecution, branchSummary, custom, hookMessage
-		}
-
-		return lines.join("\n").trim();
+		return formatCompactConversationContext(this.messages);
 	}
 
 	// =========================================================================

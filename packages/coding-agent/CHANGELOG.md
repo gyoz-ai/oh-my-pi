@@ -15,6 +15,7 @@
 
 ### Changed
 
+- Split `AgentSession` into a composed core plus four focused subsystems: `BashController` (bash exec + pending-message queue), `PythonController` (python exec + kernel ownership + dispose lifecycle), `TreeNavigator` (branch/tree navigation + summary abort), and `session-inspection` (stats/context-usage/format/copy-text). The class is now ~700 lines smaller and public `AgentSession` API is unchanged. ([#1161](https://github.com/can1357/oh-my-pi/issues/1161))
 - Changed `/fast` to be a single provider-agnostic toggle: enabling the command sets `serviceTier: "priority"` for every provider, and the anthropic-messages provider translates `priority` into `speed: "fast"` plus the `fast-mode-2026-02-01` beta. Anthropic fast mode is currently supported on Claude Opus 4.6 and 4.7; the server rejects other models, which triggers the provider's auto-fallback (request retried without the priority signal, `providerSessionState.fastModeDisabled` persisted for the rest of the session). The session listens for the `"priority"` marker in `AssistantMessage.disabledFeatures`, syncs `/fast` off, and emits a warning notice. Re-running `/fast on` clears the per-session disable so the next request actually re-tries priority.
 
 ## [15.1.6] - 2026-05-19
