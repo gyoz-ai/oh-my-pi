@@ -881,7 +881,13 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 					}
 
 					const legacyFunctionCall: LegacyFunctionCallDelta | undefined = choice.delta.function_call;
-					if (legacyFunctionCall) {
+					const legacyFunctionName =
+						typeof legacyFunctionCall?.name === "string" ? legacyFunctionCall.name : undefined;
+					const legacyFunctionArguments =
+						typeof legacyFunctionCall?.arguments === "string" ? legacyFunctionCall.arguments : undefined;
+					const hasLegacyFunctionCallDelta =
+						(legacyFunctionName?.length ?? 0) > 0 || (legacyFunctionArguments?.length ?? 0) > 0;
+					if (legacyFunctionCall && hasLegacyFunctionCallDelta) {
 						let block = legacyFunctionCallBlock;
 						if (!block) {
 							if (currentBlock?.type !== "toolCall") {
@@ -890,7 +896,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 							block = {
 								type: "toolCall",
 								id: "call_legacy_function",
-								name: legacyFunctionCall.name ?? "",
+								name: legacyFunctionName ?? "",
 								arguments: {},
 								partialArgs: "",
 							};
@@ -907,8 +913,8 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (
 							currentBlock = block;
 						}
 
-						if (legacyFunctionCall.name) block.name = legacyFunctionCall.name;
-						const delta = legacyFunctionCall.arguments ?? "";
+						if (legacyFunctionName) block.name = legacyFunctionName;
+						const delta = legacyFunctionArguments ?? "";
 						if (delta.length > 0) {
 							block.partialArgs = (block.partialArgs ?? "") + delta;
 							const throttled = parseStreamingJsonThrottled(block.partialArgs, block.lastParseLen ?? 0);

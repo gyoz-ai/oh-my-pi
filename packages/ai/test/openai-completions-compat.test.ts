@@ -577,6 +577,49 @@ describe("openai-completions compatibility", () => {
 		});
 	});
 
+	it("ignores empty deprecated function_call preambles", async () => {
+		const model: Model<"openai-completions"> = {
+			...getBundledModel("openai", "gpt-4o-mini"),
+			api: "openai-completions",
+		};
+		global.fetch = createMockFetch([
+			{
+				id: "chatcmpl-empty-legacy-function",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { function_call: {} } }],
+			},
+			{
+				id: "chatcmpl-empty-legacy-function",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { function_call: { arguments: "" } } }],
+			},
+			{
+				id: "chatcmpl-empty-legacy-function",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: { content: "No tool needed." } }],
+			},
+			{
+				id: "chatcmpl-empty-legacy-function",
+				object: "chat.completion.chunk",
+				created: 0,
+				model: model.id,
+				choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			},
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(model, baseContext(), { apiKey: "test-key" }).result();
+		expect(result.stopReason).toBe("stop");
+		expect(getToolCalls(result.content)).toHaveLength(0);
+		expect(result.content).toEqual([{ type: "text", text: "No tool needed." }]);
+	});
+
 	it("reconstructs interleaved structured tool_calls by documented index", async () => {
 		const model: Model<"openai-completions"> = {
 			...getBundledModel("openai", "gpt-4o-mini"),
