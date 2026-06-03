@@ -624,7 +624,7 @@ function convertConversationMessages(
  * runtime path only consumes that metadata.
  * @internal Exported for tests.
  */
-export function supportsFreeformApplyPatch(model: Model<"openai-responses">): boolean {
+export function supportsFreeformApplyPatch(model: Pick<Model<"openai-responses">, "applyPatchToolType">): boolean {
 	return model.applyPatchToolType === "freeform";
 }
 
@@ -632,17 +632,26 @@ export function supportsFreeformApplyPatch(model: Model<"openai-responses">): bo
 export function mapOpenAIResponsesToolChoiceForTools(
 	choice: ToolChoice | undefined,
 	tools: Tool[],
-	model: Model<"openai-responses">,
+	model: Pick<Model<"openai-responses">, "applyPatchToolType">,
 ): OpenAIResponsesToolChoice {
 	const mapped = mapToOpenAIResponsesToolChoice(choice);
-	if (!mapped || typeof mapped === "string" || mapped.type !== "function" || !supportsFreeformApplyPatch(model)) {
+	if (!mapped || typeof mapped === "string" || mapped.type !== "function") {
 		return mapped;
 	}
 
-	const customTool = tools.find(
-		tool => tool.customFormat && (tool.name === mapped.name || tool.customWireName === mapped.name),
-	);
-	return customTool ? { type: "custom", name: customTool.customWireName ?? customTool.name } : mapped;
+	const directTool = tools.find(tool => tool.name === mapped.name);
+	if (directTool) {
+		return supportsFreeformApplyPatch(model) && directTool.customFormat
+			? { type: "custom", name: directTool.customWireName ?? directTool.name }
+			: mapped;
+	}
+
+	if (!supportsFreeformApplyPatch(model)) {
+		return undefined;
+	}
+
+	const customTool = tools.find(tool => tool.customFormat && tool.customWireName === mapped.name);
+	return customTool ? { type: "custom", name: customTool.customWireName ?? customTool.name } : undefined;
 }
 
 /** @internal Exported for tests. */

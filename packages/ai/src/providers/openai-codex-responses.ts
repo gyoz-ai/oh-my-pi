@@ -490,13 +490,18 @@ export function normalizeCodexToolChoice(
 	if (!choice) return undefined;
 	if (typeof choice === "string") return choice;
 	const allowFreeform = model ? supportsFreeformApplyPatchCodex(model) : false;
-	const mapName = (name: string): Record<string, string> => {
-		const customTool = allowFreeform
-			? tools.find(tool => tool.customFormat && (tool.name === name || tool.customWireName === name))
-			: undefined;
-		return customTool
-			? { type: "custom", name: customTool.customWireName ?? customTool.name }
-			: { type: "function", name };
+	const mapName = (name: string): Record<string, string> | undefined => {
+		const directTool = tools.find(tool => tool.name === name);
+		if (directTool) {
+			return allowFreeform && directTool.customFormat
+				? { type: "custom", name: directTool.customWireName ?? directTool.name }
+				: { type: "function", name };
+		}
+		if (!allowFreeform) {
+			return undefined;
+		}
+		const customTool = tools.find(tool => tool.customFormat && tool.customWireName === name);
+		return customTool ? { type: "custom", name: customTool.customWireName ?? customTool.name } : undefined;
 	};
 	if (choice.type === "function") {
 		if ("function" in choice && choice.function?.name) {

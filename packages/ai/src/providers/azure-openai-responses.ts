@@ -28,8 +28,11 @@ import {
 } from "../utils/idle-iterator";
 import { sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { wrapFetchForSseDebug } from "../utils/sse-debug";
-import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
-import { normalizeOpenAIResponsesPromptCacheKey, supportsDeveloperRole } from "./openai-responses";
+import {
+	mapOpenAIResponsesToolChoiceForTools,
+	normalizeOpenAIResponsesPromptCacheKey,
+	supportsDeveloperRole,
+} from "./openai-responses";
 import {
 	appendResponsesToolResultMessages,
 	applyCommonResponsesSamplingParams,
@@ -301,7 +304,7 @@ function buildParams(
 	if (context.tools) {
 		params.tools = convertTools(context.tools);
 		if (options?.toolChoice) {
-			params.tool_choice = mapToOpenAIResponsesToolChoice(options.toolChoice);
+			params.tool_choice = mapOpenAIResponsesToolChoiceForTools(options.toolChoice, context.tools, model);
 		}
 	}
 
