@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Breaking Changes
 
 - Removed `harmony-leak` exports from the `@oh-my-pi/pi-agent-core` package entrypoint
