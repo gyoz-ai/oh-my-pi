@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed delimiter-balance repair so a multi-hunk patch no longer keeps a deleted closer when another hunk has already balanced the imbalance (e.g. a `DEL` of the matching opener); the closer-spare decision now uses the patch delta computed after the local boundary/duplicate repairs have settled. ([#3142](https://github.com/can1357/oh-my-pi/issues/3142))
+- Fixed delimiter-balance repair so a multi-hunk patch no longer keeps a deleted closer when another hunk has already balanced the imbalance (e.g. a `DEL` of the matching opener); the closer-spare decision now uses the patch delta computed after local boundary/duplicate repairs, consumes that residual per accepted closer repair, and treats adjacent deleted opener prefixes as wrapper removals. ([#3142](https://github.com/can1357/oh-my-pi/issues/3142))
 
 ## [16.1.2] - 2026-06-19
 

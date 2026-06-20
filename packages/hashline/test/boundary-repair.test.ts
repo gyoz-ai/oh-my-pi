@@ -147,6 +147,15 @@ describe("boundary-balance repair", () => {
 		expect(warnings).toHaveLength(0);
 	});
 
+	it("does not spend a genuine missing-closer residual on an earlier wrapper removal", () => {
+		const file = ["if enabled {", '\tText("Old")', "}", "const config = {", "\ta: 1,", "};"].join("\n");
+		const diff = ["DEL 1", "SWAP 2.=3:", '+Text("New")', "SWAP 6.=6:", "+\tb: 2,"].join("\n");
+		const { text, warnings } = apply(file, diff);
+
+		expect(text).toBe(['Text("New")', "const config = {", "\ta: 1,", "\tb: 2,", "};"].join("\n"));
+		expect(warnings.filter(w => /structural closing line/.test(w))).toHaveLength(1);
+	});
+
 	// A separate hunk's dupSuffix repair leaves another hunk's missing-closer
 	// imbalance unmasked: pass 2 must recompute the patch delta from the
 	// post-pass1 edit stream so the genuine droppedClosers repair still fires.

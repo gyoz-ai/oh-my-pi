@@ -338,6 +338,18 @@ function computeEditBalanceDelta(edits: readonly AppliedEdit[], fileLines: reado
 	return balanceDelta(computeDelimiterBalance(inserted), computeDelimiterBalance(deleted));
 }
 
+function deletedPrefixBalance(
+	group: ReplacementGroup,
+	deletedLines: ReadonlySet<number>,
+	fileLines: readonly string[],
+): DelimiterBalance {
+	const lines: string[] = [];
+	for (let line = group.startLine - 1; line >= 1 && deletedLines.has(line); line--) {
+		lines.unshift(fileLines[line - 1] ?? "");
+	}
+	return computeDelimiterBalance(lines);
+}
+
 interface ReplacementGroup {
 	/** Positions in the edit array of the payload inserts, in payload order. */
 	insertIndices: number[];
@@ -714,16 +726,21 @@ function repairReplacementBoundaries(
 
 	// Pass 2: with local repairs already projected, compute the residual
 	// delimiter delta from the post-pass1 edit stream (candidate groups still
-	// in their raw form). A dropped-closer repair only fires when this
-	// patchDelta covers the candidate's delta in the same direction — sparing
-	// a closer in a patch already balanced by some other hunk (e.g. a DEL of
-	// the matching opener, #3142) would inject a stray closer.
+	// in their raw form). A dropped-closer repair only fires when the remaining
+	// residual delta covers that candidate's delta in the same direction, then
+	// consumes that residual. Candidates whose adjacent deleted prefix already
+	// accounts for the delta are wrapper removals, not missing closers.
 	const projected: AppliedEdit[] = [];
 	for (const slot of slots) {
 		if (slot.kind === "candidate") projected.push(...slot.inserts, ...slot.deletes);
 		else projected.push(...slot.edits);
 	}
 	const patchDelta = computeEditBalanceDelta(projected, fileLines);
+	const deletedLines = new Set<number>();
+	for (const edit of projected) {
+		if (edit.kind === "delete") deletedLines.add(edit.anchor.line);
+	}
+	let remainingDelta = patchDelta;
 
 	const out: AppliedEdit[] = [];
 	const warnings: string[] = [];
@@ -733,9 +750,11 @@ function repairReplacementBoundaries(
 			out.push(...slot.edits);
 			continue;
 		}
-		const droppedClosers = balanceCovers(patchDelta, slot.delta)
-			? findDroppedSuffixClosers(slot.group, fileLines, slot.delta)
-			: 0;
+		const prefixBalance = deletedPrefixBalance(slot.group, deletedLines, fileLines);
+		const droppedClosers =
+			!balanceCovers(prefixBalance, slot.delta) && balanceCovers(remainingDelta, slot.delta)
+				? findDroppedSuffixClosers(slot.group, fileLines, slot.delta)
+				: 0;
 		if (droppedClosers > 0) {
 			warnings.push(
 				describeBoundaryRepair(
@@ -744,6 +763,7 @@ function repairReplacementBoundaries(
 				),
 			);
 			out.push(...slot.inserts, ...slot.deletes.slice(0, slot.deletes.length - droppedClosers));
+			remainingDelta = balanceDelta(remainingDelta, slot.delta);
 			continue;
 		}
 		out.push(...slot.inserts, ...slot.deletes);
