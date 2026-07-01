@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed non-PTY bash execution to pass the output sink budget into the native shell bridge so fast producers cannot grow the Rust→JS queue without bound ([#4026](https://github.com/can1357/oh-my-pi/issues/4026)).
+
 ## [16.2.12] - 2026-07-01
 
 ### Breaking Changes

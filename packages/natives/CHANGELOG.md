@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed native shell streaming to bound Rust→JS output queues and drop after the caller's stream budget while continuing to drain child pipes ([#4026](https://github.com/can1357/oh-my-pi/issues/4026)).
+
 ## [16.2.11] - 2026-07-01
 
 ### Fixed

@@ -9,7 +9,7 @@ use napi::{
 };
 use napi_derive::napi;
 use pi_shell::{
-	MinimizerResult as CoreMinimizerResult, Shell as CoreShell,
+	MinimizerResult as CoreMinimizerResult, OutputLimiter, OutputSender, Shell as CoreShell,
 	ShellExecuteOptions as CoreShellExecuteOptions, ShellOptions as CoreShellOptions,
 	ShellRunOptions as CoreShellRunOptions, ShellRunResult as CoreShellRunResult,
 	execute_shell as core_execute_shell,
@@ -90,36 +90,42 @@ impl From<ShellOptions> for CoreShellOptions {
 #[napi(object)]
 pub struct ShellRunOptions<'env> {
 	/// Command string to execute in the shell.
-	pub command:    String,
+	pub command:                 String,
 	/// Working directory for the command.
-	pub cwd:        Option<String>,
+	pub cwd:                     Option<String>,
 	/// Environment variables to apply for this command only.
-	pub env:        Option<HashMap<String, String>>,
+	pub env:                     Option<HashMap<String, String>>,
 	/// Timeout in milliseconds before cancelling the command.
-	pub timeout_ms: Option<u32>,
+	pub timeout_ms:              Option<u32>,
+	/// Maximum UTF-8 bytes forwarded to `onChunk` before native output is
+	/// dropped.
+	pub stream_output_max_bytes: Option<u32>,
 	/// Abort signal for cancelling the operation.
-	pub signal:     Option<Unknown<'env>>,
+	pub signal:                  Option<Unknown<'env>>,
 }
 
 /// Options for executing a shell command via brush-core.
 #[napi(object)]
 pub struct ShellExecuteOptions<'env> {
 	/// Command string to execute in the shell.
-	pub command:       String,
+	pub command:                 String,
 	/// Working directory for the command.
-	pub cwd:           Option<String>,
+	pub cwd:                     Option<String>,
 	/// Environment variables to apply for this command only.
-	pub env:           Option<HashMap<String, String>>,
+	pub env:                     Option<HashMap<String, String>>,
 	/// Environment variables to apply once per session.
-	pub session_env:   Option<HashMap<String, String>>,
+	pub session_env:             Option<HashMap<String, String>>,
 	/// Timeout in milliseconds before cancelling the command.
-	pub timeout_ms:    Option<u32>,
+	pub timeout_ms:              Option<u32>,
 	/// Optional snapshot file to source on session creation.
-	pub snapshot_path: Option<String>,
+	pub snapshot_path:           Option<String>,
 	/// Optional per-command output minimizer configuration.
-	pub minimizer:     Option<MinimizerOptions>,
+	pub minimizer:               Option<MinimizerOptions>,
+	/// Maximum UTF-8 bytes forwarded to `onChunk` before native output is
+	/// dropped.
+	pub stream_output_max_bytes: Option<u32>,
 	/// Abort signal for cancelling the operation.
-	pub signal:        Option<Unknown<'env>>,
+	pub signal:                  Option<Unknown<'env>>,
 }
 
 /// Telemetry for a single minimization.
@@ -216,6 +222,7 @@ impl Shell {
 	) -> Result<PromiseRaw<'env, ShellRunResult>> {
 		let cancel_token = task::CancelToken::new(options.timeout_ms, options.signal);
 		let inner = Arc::clone(&self.inner);
+		let stream_output_max_bytes = options.stream_output_max_bytes.map(|bytes| bytes as usize);
 		let run_options = CoreShellRunOptions {
 			command:    options.command,
 			cwd:        options.cwd,
@@ -223,7 +230,7 @@ impl Shell {
 			timeout_ms: options.timeout_ms,
 		};
 		task::future(env, "shell.run", async move {
-			let (chunk_tx, drain_handle) = bridge_chunks(on_chunk);
+			let (chunk_tx, drain_handle) = bridge_chunks(on_chunk, stream_output_max_bytes);
 			let result = inner
 				.run(run_options, chunk_tx, cancel_token.into_core())
 				.await
@@ -268,6 +275,7 @@ pub fn execute_shell<'env>(
 	on_chunk: Option<ThreadsafeFunction<String>>,
 ) -> Result<PromiseRaw<'env, ShellRunResult>> {
 	let cancel_token = task::CancelToken::new(options.timeout_ms, options.signal);
+	let stream_output_max_bytes = options.stream_output_max_bytes.map(|bytes| bytes as usize);
 	let exec_options = CoreShellExecuteOptions {
 		command:       options.command,
 		cwd:           options.cwd,
@@ -278,7 +286,7 @@ pub fn execute_shell<'env>(
 		minimizer:     options.minimizer.map(Into::into),
 	};
 	task::future(env, "shell.execute", async move {
-		let (chunk_tx, drain_handle) = bridge_chunks(on_chunk);
+		let (chunk_tx, drain_handle) = bridge_chunks(on_chunk, stream_output_max_bytes);
 		let result = core_execute_shell(exec_options, chunk_tx, cancel_token.into_core())
 			.await
 			.map(Into::into)
@@ -292,11 +300,18 @@ pub fn execute_shell<'env>(
 
 fn bridge_chunks(
 	on_chunk: Option<ThreadsafeFunction<String>>,
-) -> (Option<flume::Sender<String>>, Option<napi::tokio::task::JoinHandle<()>>) {
+	stream_output_max_bytes: Option<usize>,
+) -> (Option<OutputSender>, Option<napi::tokio::task::JoinHandle<()>>) {
 	let Some(on_chunk) = on_chunk else {
 		return (None, None);
 	};
-	let (tx, rx) = flume::unbounded::<String>();
+	const MAX_PENDING_CHUNKS: usize = 8;
+	let (tx, rx) = flume::bounded::<String>(MAX_PENDING_CHUNKS);
+	let limiter = stream_output_max_bytes.map(|max_bytes| Arc::new(OutputLimiter::new(max_bytes)));
+	let chunk_tx = limiter.as_ref().map_or_else(
+		|| OutputSender::unbounded(tx.clone()),
+		|limiter| OutputSender::capped(tx.clone(), limiter.clone()),
+	);
 	let handle = napi::tokio::spawn(async move {
 		// Hard cap on one coalesced batch so the JS main thread never sees a
 		// multi-MB napi callback (a giant single string would stall sanitize +
@@ -322,8 +337,19 @@ fn bridge_chunks(
 			let payload = std::mem::replace(&mut batch, String::with_capacity(INITIAL_BATCH_CAP));
 			on_chunk.call(Ok(payload), ThreadsafeFunctionCallMode::NonBlocking);
 		}
+		if let Some(limiter) = limiter {
+			let dropped = limiter.dropped_bytes();
+			if dropped > 0 {
+				let forwarded = limiter.forwarded_bytes();
+				let notice = format!(
+					"\n[output truncated: native bash stream forwarded {forwarded} bytes and discarded \
+					 {dropped} bytes before the JS callback]\n",
+				);
+				on_chunk.call(Ok(notice), ThreadsafeFunctionCallMode::NonBlocking);
+			}
+		}
 	});
-	(Some(tx), Some(handle))
+	(Some(chunk_tx), Some(handle))
 }
 
 /// Result of [`apply_bash_fixups`]: a possibly-rewritten command plus the
@@ -359,7 +385,7 @@ mod tests {
 	#[cfg(unix)]
 	use flume;
 	use pi_shell::{
-		ShellRunOptions as CoreShellRunOptions,
+		OutputSender, ShellRunOptions as CoreShellRunOptions,
 		cancel::{AbortReason, CancelToken},
 	};
 	use tokio::time;
@@ -421,7 +447,7 @@ mod tests {
 						env:        None,
 						timeout_ms: None,
 					},
-					Some(tx),
+					Some(OutputSender::unbounded(tx)),
 					CancelToken::default(),
 				)
 				.await
