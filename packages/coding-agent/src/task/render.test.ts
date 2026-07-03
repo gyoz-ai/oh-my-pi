@@ -178,9 +178,7 @@ describe("task live progress rendering", () => {
 		};
 
 		expect(taskNeedsTimedRepaint({ ...idleParent, inflightTaskDetails: nestedDetails })).toBe(true);
-		expect(
-			taskNeedsTimedRepaint({ ...idleParent, extractedToolData: { task: [nestedDetails] } }),
-		).toBe(true);
+		expect(taskNeedsTimedRepaint({ ...idleParent, extractedToolData: { task: [nestedDetails] } })).toBe(true);
 	});
 
 	it("renders running progress identically across spinner frames", () => {
