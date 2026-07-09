@@ -41,8 +41,9 @@ export function canonicalizeMessage(text: string | null | undefined): string {
 }
 
 export function formatThinkingForDisplay(text: string, proseOnly: boolean): string {
+	if (!proseOnly || !text) return text;
 	const cleanedText = stripEmptyHtmlCommentSeparators(text);
-	if (!proseOnly || !cleanedText) return cleanedText;
+	if (!cleanedText) return cleanedText;
 	if (text === formatCacheKey) return formatCacheValue;
 
 	const lines = cleanedText.split("\n");
