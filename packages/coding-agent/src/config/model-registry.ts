@@ -1664,6 +1664,7 @@ export class ModelRegistry {
 		});
 		const enabledSpecialProviderDescriptors = specialProviderDescriptors.filter(descriptor => {
 			if (disabledProviders.has(descriptor.providerId)) return false;
+			if (configuredDiscoveryProviders.has(descriptor.providerId)) return false;
 			return providerFilter ? providerFilter.has(descriptor.providerId) : true;
 		});
 		const standardProviderKeys = await Promise.all(
