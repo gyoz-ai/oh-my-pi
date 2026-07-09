@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed built-in provider model discovery to refresh only the expired stored OAuth credential needed for an online provider refresh, while leaving unrelated providers and offline discovery untouched ([#4893](https://github.com/can1357/oh-my-pi/issues/4893)).
+
 ## [16.3.12] - 2026-07-08
 
 ### Added

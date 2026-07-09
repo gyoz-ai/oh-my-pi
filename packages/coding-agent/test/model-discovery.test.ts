@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Effort, type FetchImpl, type Model } from "@oh-my-pi/pi-ai";
+import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import type { OpenAICompat } from "@oh-my-pi/pi-catalog/types";
@@ -19,15 +20,18 @@ describe("ModelRegistry runtime discovery", () => {
 	let originalOllamaBaseUrl: string | undefined;
 	let originalOllamaHost: string | undefined;
 	let originalOllamaContextLength: string | undefined;
+	let originalAnthropicApiKey: string | undefined;
 
 	beforeEach(async () => {
 		resetSettingsForTest();
 		originalOllamaBaseUrl = Bun.env.OLLAMA_BASE_URL;
 		originalOllamaHost = Bun.env.OLLAMA_HOST;
 		originalOllamaContextLength = Bun.env.OLLAMA_CONTEXT_LENGTH;
+		originalAnthropicApiKey = Bun.env.ANTHROPIC_API_KEY;
 		delete Bun.env.OLLAMA_BASE_URL;
 		delete Bun.env.OLLAMA_HOST;
 		delete Bun.env.OLLAMA_CONTEXT_LENGTH;
+		delete Bun.env.ANTHROPIC_API_KEY;
 		tempDir = path.join(os.tmpdir(), `pi-test-model-registry-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
 		modelsJsonPath = path.join(tempDir, "models.json");
@@ -54,6 +58,11 @@ describe("ModelRegistry runtime discovery", () => {
 			delete Bun.env.OLLAMA_CONTEXT_LENGTH;
 		} else {
 			Bun.env.OLLAMA_CONTEXT_LENGTH = originalOllamaContextLength;
+		}
+		if (originalAnthropicApiKey === undefined) {
+			delete Bun.env.ANTHROPIC_API_KEY;
+		} else {
+			Bun.env.ANTHROPIC_API_KEY = originalAnthropicApiKey;
 		}
 		authStorage.close();
 		if (tempDir && fs.existsSync(tempDir)) {
@@ -114,6 +123,116 @@ describe("ModelRegistry runtime discovery", () => {
 			throw new Error(`Unexpected URL: ${url}`);
 		};
 	}
+
+	async function useAuthStorageWithRefreshTracker() {
+		authStorage.close();
+		const refreshCalls: string[] = [];
+		authStorage = await AuthStorage.create(":memory:", {
+			refreshOAuthCredential: async (provider, _credentialId, credential): Promise<OAuthCredentials> => {
+				refreshCalls.push(provider);
+				return {
+					...credential,
+					access: provider === "anthropic" ? "sk-ant-oat-fresh-anthropic" : `fresh-${provider}`,
+					expires: Date.now() + 3_600_000,
+				};
+			},
+		});
+		return { refreshCalls };
+	}
+
+	type AnthropicDiscoveryCapture = {
+		modelListAuthorization?: string | null;
+		modelListXApiKey?: string | null;
+		modelListCalls: number;
+	};
+
+	function mockAnthropicModelsDiscovery(capture: AnthropicDiscoveryCapture): FetchImpl {
+		const endpointPrefix = "https://api.anthropic.com/";
+		return async (input, init) => {
+			const url = String(input);
+			if (url === "https://models.dev/api.json") {
+				return Response.json({});
+			}
+			if (url.startsWith(endpointPrefix) && url.endsWith("/models")) {
+				const headers = new Headers(init?.headers);
+				capture.modelListAuthorization = headers.get("authorization");
+				capture.modelListXApiKey = headers.get("x-api-key");
+				capture.modelListCalls++;
+				return Response.json({
+					data: [{ id: "claude-regression-4893", display_name: "Claude Regression 4893" }],
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		};
+	}
+
+	test("refreshProvider online refreshes expired anthropic OAuth before model discovery", async () => {
+		const { refreshCalls } = await useAuthStorageWithRefreshTracker();
+		await authStorage.set("anthropic", {
+			type: "oauth",
+			access: "sk-ant-oat-expired-anthropic",
+			refresh: "refresh-anthropic",
+			expires: Date.now() - 60_000,
+		});
+		const capture: AnthropicDiscoveryCapture = { modelListCalls: 0 };
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+			fetch: mockAnthropicModelsDiscovery(capture),
+		});
+
+		await registry.refreshProvider("anthropic", "online");
+
+		expect(refreshCalls).toEqual(["anthropic"]);
+		expect(capture.modelListCalls).toBe(1);
+		expect(capture.modelListAuthorization).toBe("Bearer sk-ant-oat-fresh-anthropic");
+		expect(capture.modelListXApiKey).toBeNull();
+		expect(registry.find("anthropic", "claude-regression-4893")).toBeDefined();
+	});
+
+	test("refreshProvider online does not refresh unrelated expired OAuth credentials", async () => {
+		const { refreshCalls } = await useAuthStorageWithRefreshTracker();
+		await authStorage.set("anthropic", {
+			type: "oauth",
+			access: "sk-ant-oat-expired-anthropic",
+			refresh: "refresh-anthropic",
+			expires: Date.now() - 60_000,
+		});
+		await authStorage.set("openai", {
+			type: "oauth",
+			access: "expired-openai",
+			refresh: "refresh-openai",
+			expires: Date.now() - 60_000,
+		});
+		const capture: AnthropicDiscoveryCapture = { modelListCalls: 0 };
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+			fetch: mockAnthropicModelsDiscovery(capture),
+		});
+
+		await registry.refreshProvider("anthropic", "online");
+
+		expect(refreshCalls).toEqual(["anthropic"]);
+		expect(authStorage.getOAuthCredential("openai")?.access).toBe("expired-openai");
+		expect(capture.modelListCalls).toBe(1);
+	});
+
+	test("refreshProvider offline does not touch expired OAuth credentials", async () => {
+		const { refreshCalls } = await useAuthStorageWithRefreshTracker();
+		await authStorage.set("anthropic", {
+			type: "oauth",
+			access: "sk-ant-oat-expired-anthropic",
+			refresh: "refresh-anthropic",
+			expires: Date.now() - 60_000,
+		});
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+			fetch: async input => {
+				throw new Error(`Offline discovery should not fetch ${String(input)}`);
+			},
+		});
+
+		await registry.refreshProvider("anthropic", "offline");
+
+		expect(refreshCalls).toEqual([]);
+		expect(authStorage.getOAuthCredential("anthropic")?.access).toBe("sk-ant-oat-expired-anthropic");
+	});
 
 	test("auto-discovers ollama models without provider config", async () => {
 		const fetchMock = mockOllamaDiscovery(["phi4-mini"]);
