@@ -1,5 +1,6 @@
 import { createConnection } from "node:net";
 import { $env } from "@oh-my-pi/pi-utils";
+import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { SessionObserverRegistry } from "./session-observer-registry";
 
 export function maybeCreateHerdrSubagentReporter(
@@ -92,6 +93,12 @@ export function maybeCreateHerdrSubagentReporter(
 		if (!anyRetainedWorking && sessions.some(s => s.status === "active" && !rows.has(s.id))) {
 			rows.clear();
 		}
+		const ordinals = new Map<string, number>();
+		for (const ref of AgentRegistry.global().list()) {
+			if (ref.kind === "sub" && ref.parentId === MAIN_AGENT_ID && ref.status !== "aborted") {
+				ordinals.set(ref.id, ordinals.size);
+			}
+		}
 		for (const session of sessions) {
 			const status = session.status === "active" ? "working" : session.status === "completed" ? "done" : "failed";
 			if (status !== "working" && !rows.has(session.id)) continue;
@@ -100,7 +107,7 @@ export function maybeCreateHerdrSubagentReporter(
 				agent: session.agent ?? "task",
 				status,
 				description: session.description,
-				index: session.index ?? 0,
+				index: ordinals.get(session.id) ?? session.index ?? 0,
 			});
 		}
 		scheduleFlush();

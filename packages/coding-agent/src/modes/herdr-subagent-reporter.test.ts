@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { $env } from "@oh-my-pi/pi-utils";
+import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { type SubagentLifecyclePayload, TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "../task";
 import { EventBus } from "../utils/event-bus";
 import { maybeCreateHerdrSubagentReporter } from "./herdr-subagent-reporter";
@@ -104,6 +105,7 @@ afterEach(async () => {
 		if (value === undefined) delete $env[key];
 		else $env[key] = value;
 	}
+	AgentRegistry.resetGlobalForTests();
 });
 
 describe("maybeCreateHerdrSubagentReporter", () => {
@@ -193,6 +195,41 @@ describe("maybeCreateHerdrSubagentReporter", () => {
 		emitLifecycle({ id: "b", status: "started", index: 0 });
 		await waitFrames(3);
 		expect(frames[2].params.subagents).toEqual([{ id: "b", agent: "task", status: "working", index: 0 }]);
+	});
+
+	it("emits indexes from AgentRegistry registration order, not task-batch position", async () => {
+		const agents = AgentRegistry.global();
+		agents.register({ id: MAIN_AGENT_ID, displayName: "Main", kind: "main", session: null });
+		agents.register({ id: "zed", displayName: "zed", kind: "sub", parentId: MAIN_AGENT_ID, session: null });
+		agents.setStatus("zed", "aborted");
+		agents.register({ id: "beta", displayName: "beta", kind: "sub", parentId: MAIN_AGENT_ID, session: null });
+		agents.register({ id: "alpha", displayName: "alpha", kind: "sub", parentId: MAIN_AGENT_ID, session: null });
+		reporter = maybeCreateHerdrSubagentReporter(registry);
+		emitLifecycle({ id: "alpha", status: "started", index: 0 });
+		emitLifecycle({ id: "beta", status: "started", index: 1 });
+		emitLifecycle({ id: "gamma", status: "started", index: 2 });
+		await waitFrames(1);
+		expect(frames[0].params.subagents).toEqual([
+			{ id: "alpha", agent: "task", status: "working", index: 1 },
+			{ id: "beta", agent: "task", status: "working", index: 0 },
+			{ id: "gamma", agent: "task", status: "working", index: 2 },
+		]);
+	});
+
+	it("resolves dispose only after the final empty-list frame is on the wire", async () => {
+		const created = maybeCreateHerdrSubagentReporter(registry);
+		if (!created) throw new Error("reporter not created");
+		reporter = created;
+		emitLifecycle({ id: "a", status: "started", index: 0 });
+		await waitFrames(1);
+		let resolved = false;
+		const disposePromise = created.dispose().then(() => {
+			resolved = true;
+		});
+		await waitFrames(2);
+		expect(resolved).toBe(false);
+		await disposePromise;
+		expect(frames[1].params.subagents).toEqual([]);
 	});
 
 	it("flushes an empty list on registry reset and on dispose, then stops reporting", async () => {

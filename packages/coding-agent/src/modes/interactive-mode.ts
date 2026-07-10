@@ -3894,6 +3894,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#isShuttingDown) return;
 		this.#isShuttingDown = true;
 
+		const herdrReporterFlush = this.#herdrSubagentReporter?.dispose();
+
 		this.#btwController.dispose();
 		this.#omfgController.dispose();
 		this.#focusController.dispose();
@@ -3936,6 +3938,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// terminal back (which would leave the parent shell with a `π ⠋ …` tab).
 		disposeTerminalTitleState();
 		popTerminalTitle();
+		await herdrReporterFlush;
 		this.stop();
 
 		// Print resumption hint if this is a persisted session
