@@ -170,6 +170,7 @@ import { SessionFocusController } from "./controllers/session-focus-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TanCommandController } from "./controllers/tan-command-controller";
 import { TodoCommandController } from "./controllers/todo-command-controller";
+import { maybeCreateHerdrSubagentReporter } from "./herdr-subagent-reporter";
 import {
 	consumeLoopLimitIteration,
 	createLoopLimitRuntime,
@@ -669,6 +670,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#voicePreviousUseTerminalCursor: boolean | null = null;
 	#resizeHandler?: () => void;
 	#observerRegistry: SessionObserverRegistry;
+	#herdrSubagentReporter?: { dispose(): Promise<void> };
 	#eventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
 	#observerUiSyncTimer?: NodeJS.Timeout;
@@ -1005,6 +1007,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#eventBus) {
 			this.#observerRegistry.subscribeToEventBus(this.#eventBus);
 		}
+		this.#herdrSubagentReporter = maybeCreateHerdrSubagentReporter(this.#observerRegistry);
 		this.#observerRegistry.setMainSession(this.sessionManager.getSessionFile() ?? undefined);
 		this.syncRunningSubagentBadge();
 		this.#observerRegistry.onChange(kind => {
@@ -3860,6 +3863,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			unsubscribe();
 		}
 		this.#eventBusUnsubscribers = [];
+		void this.#herdrSubagentReporter?.dispose();
+		this.#herdrSubagentReporter = undefined;
 		this.#observerRegistry.dispose();
 		this.#agentRegistryUnsubscribe?.();
 		this.#agentRegistryUnsubscribe = undefined;
