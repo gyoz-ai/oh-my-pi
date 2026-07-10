@@ -256,7 +256,13 @@ function formatYieldPreview(item: RenderYieldItem): string {
 	}
 }
 
-function renderTypedYieldSections(value: unknown, continuePrefix: string, expanded: boolean, theme: Theme): string[] {
+function renderTypedYieldSections(
+	value: unknown,
+	continuePrefix: string,
+	expanded: boolean,
+	theme: Theme,
+	width?: number,
+): string[] {
 	const typedItems: Array<{ item: RenderYieldItem; labels: string[] }> = [];
 	for (const item of normalizeYieldData(value)) {
 		const labels = getRenderYieldLabels(item.type);
@@ -269,7 +275,29 @@ function renderTypedYieldSections(value: unknown, continuePrefix: string, expand
 		const terminal = !Array.isArray(item.type);
 		const prefix = terminal ? "yield" : "yield+";
 		const label = `${prefix}[${labels.join(", ")}]`;
-		lines.push(`${continuePrefix}${theme.fg("dim", label)}: ${theme.fg("dim", formatYieldPreview(item))}`);
+		if (!expanded || item.data === undefined) {
+			lines.push(`${continuePrefix}${theme.fg("dim", label)}: ${theme.fg("dim", formatYieldPreview(item))}`);
+			continue;
+		}
+		lines.push(`${continuePrefix}${theme.fg("dim", label)}:`);
+		if (typeof item.data === "string") {
+			const markdown = new Markdown(item.data, 0, 0, getMarkdownTheme(), {
+				color: line => theme.fg("muted", line),
+			});
+			for (const rendered of markdown.render(Math.max(20, (width ?? 84) - ASSIGNMENT_FRAME_INSET - 4))) {
+				lines.push(`${continuePrefix}  ${rendered}`);
+			}
+			continue;
+		}
+		let pretty: string;
+		try {
+			pretty = JSON.stringify(item.data, null, 2) ?? String(item.data);
+		} catch {
+			pretty = String(item.data);
+		}
+		for (const dataLine of pretty.split("\n")) {
+			lines.push(`${continuePrefix}  ${theme.fg("dim", replaceTabs(dataLine))}`);
+		}
 	}
 	if (typedItems.length > displayCount) {
 		lines.push(`${continuePrefix}${theme.fg("dim", formatMoreItems(typedItems.length - displayCount, "yield"))}`);
@@ -1207,6 +1235,7 @@ function renderAgentResult(
 	theme: Theme,
 	seenNestedTasks?: WeakSet<object>,
 	nestedDepth = 0,
+	width?: number,
 ): string[] {
 	const lines: string[] = [];
 
@@ -1309,7 +1338,7 @@ function renderAgentResult(
 		for (const toolName in result.extractedToolData) {
 			const dataArray = result.extractedToolData[toolName];
 			if (toolName === "yield") {
-				const yieldLines = renderTypedYieldSections(dataArray, continuePrefix, expanded, theme);
+				const yieldLines = renderTypedYieldSections(dataArray, continuePrefix, expanded, theme, width);
 				if (yieldLines.length > 0) {
 					hasCustomRendering = true;
 					lines.push(...yieldLines);
@@ -1367,9 +1396,17 @@ function renderAgentResult(
 	}
 
 	// Fallback to output preview if no custom rendering
-	if (!hasCustomRendering) {
+	if (!hasCustomRendering || (expanded && !completeData.some(item => item.data !== undefined))) {
 		lines.push(
-			...renderOutputSection(outputWithoutWarning, continuePrefix, expanded, theme, 3, 12, missingCompleteWarning),
+			...renderOutputSection(
+				outputWithoutWarning,
+				continuePrefix,
+				expanded,
+				theme,
+				3,
+				expanded ? Number.MAX_SAFE_INTEGER : 12,
+				missingCompleteWarning,
+			),
 		);
 	}
 
@@ -1581,7 +1618,7 @@ export function renderResult(
 			const ordered = orderResultsForDisplay(details.results);
 			const visible = expanded ? ordered : selectCollapsedResults(ordered);
 			for (const res of visible) {
-				lines.push(...renderAgentResult(res, "", "  ", expanded, theme));
+				lines.push(...renderAgentResult(res, "", "  ", expanded, theme, undefined, 0, width));
 			}
 			if (visible.length < ordered.length) {
 				const hint = formatExpandHint(theme, false, true);
@@ -1625,12 +1662,18 @@ export function renderResult(
 
 		if (lines.length === 0) {
 			const text = fallbackText.trim() ? fallbackText : "No results";
+			const bodyLines =
+				expanded && fallbackText.trim()
+					? new Markdown(fallbackText.trim(), 0, 0, getMarkdownTheme(), {
+							color: line => theme.fg("muted", line),
+						}).render(Math.max(1, width - ASSIGNMENT_FRAME_INSET))
+					: [theme.fg("dim", truncateToWidth(text, width))];
 			return {
 				header,
 				sections: [
 					...(contextSection ? [contextSection(width)] : []),
 					...(assignmentSection ? [assignmentSection(width)] : []),
-					{ separator: true, lines: [theme.fg("dim", truncateToWidth(text, width))] },
+					{ separator: true, lines: bodyLines },
 				],
 				state,
 				borderColor,

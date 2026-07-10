@@ -3,7 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
 import type { SettingPath, SettingValue } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getThemeByName, initTheme, setThemeInstance, type Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { renderResult } from "@oh-my-pi/pi-coding-agent/task/render";
 import { taskToolRenderer } from "@oh-my-pi/pi-coding-agent/task/renderer";
 import type { AgentProgress, SingleResult, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task/types";
@@ -12,6 +12,7 @@ let uiTheme: Theme;
 
 beforeAll(async () => {
 	await Settings.init({ inMemory: true, cwd: process.cwd() });
+	await initTheme();
 	const loaded = await getThemeByName("dark");
 	expect(loaded).toBeDefined();
 	uiTheme = loaded!;
@@ -51,6 +52,31 @@ function renderTaskBlock(details: TaskToolDetails, options: { expanded: boolean;
 		uiTheme,
 	);
 	return stripVTControlCharacters(component.render(120).join("\n"));
+}
+
+function makeResult(overrides: Partial<SingleResult> & { id: string }): SingleResult {
+	return {
+		index: 0,
+		agent: "task",
+		agentSource: "bundled",
+		task: "investigate the auth flow",
+		exitCode: 0,
+		output: "",
+		stderr: "",
+		truncated: false,
+		durationMs: 1234,
+		tokens: 10,
+		requests: 1,
+		...overrides,
+	};
+}
+
+function resultDetails(results: SingleResult[]): TaskToolDetails {
+	return {
+		projectAgentsDir: null,
+		results,
+		totalDurationMs: 1234,
+	};
 }
 
 function runningProgress(overrides: Partial<AgentProgress> = {}): AgentProgress {
@@ -564,5 +590,50 @@ describe("running agent live output tail", () => {
 		const details = progressDetails([makeProgress({ id: "Anna", status: "completed", recentOutput })]);
 		const out = renderTaskBlock(details, { expanded: false });
 		expect(out).not.toContain("tail line 8");
+	});
+});
+
+describe("expanded agent result reports", () => {
+	it("expanded string yield data renders the full markdown body", () => {
+		const report = `# Findings\n\n${"first paragraph. ".repeat(10)}\n\nlast paragraph LAST-MARKER`;
+		const details = resultDetails([
+			makeResult({ id: "Anna", extractedToolData: { yield: [{ type: "result", data: report }] } }),
+		]);
+
+		const collapsed = renderTaskBlock(details, { expanded: false, isPartial: false });
+		expect(collapsed).toContain("yield[result]");
+		expect(collapsed).not.toContain("LAST-MARKER");
+
+		const expanded = renderTaskBlock(details, { expanded: true, isPartial: false });
+		expect(expanded).toContain("Findings");
+		expect(expanded).toContain("LAST-MARKER");
+	});
+
+	it("expanded object yield data pretty-prints the full JSON", () => {
+		const data = { padding: "x".repeat(100), detail: "DEEP-VALUE" };
+		const details = resultDetails([
+			makeResult({ id: "Anna", extractedToolData: { yield: [{ type: "result", data }] } }),
+		]);
+
+		const collapsed = renderTaskBlock(details, { expanded: false, isPartial: false });
+		expect(collapsed).not.toContain("DEEP-VALUE");
+
+		const expanded = renderTaskBlock(details, { expanded: true, isPartial: false });
+		expect(expanded).toContain('"detail": "DEEP-VALUE"');
+	});
+
+	it("expanded result without yield data falls back to the full output", () => {
+		const output = Array.from({ length: 20 }, (_, index) => `out line ${index + 1}`).join("\n");
+		const details = resultDetails([makeResult({ id: "Anna", output })]);
+
+		const collapsed = renderTaskBlock(details, { expanded: false, isPartial: false });
+		expect(collapsed).toContain("out line 3");
+		expect(collapsed).not.toContain("out line 4");
+		expect(collapsed).toContain("17 more lines");
+
+		const expanded = renderTaskBlock(details, { expanded: true, isPartial: false });
+		expect(expanded).toContain("out line 4");
+		expect(expanded).toContain("out line 20");
+		expect(expanded).not.toContain("more lines");
 	});
 });
