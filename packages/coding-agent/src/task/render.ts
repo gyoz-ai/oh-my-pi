@@ -33,7 +33,7 @@ import {
 	parseFindingDetails,
 	type SubmitReviewDetails,
 } from "../tools/review";
-import { framedBlock, renderStatusLine } from "../tui";
+import { fileHyperlink, framedBlock, renderStatusLine } from "../tui";
 import { repairDoubleEncodedJsonString } from "./repair-args";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import type { AgentProgress, SingleResult, TaskItem, TaskParams, TaskToolDetails, YieldItem } from "./types";
@@ -1412,6 +1412,12 @@ function renderAgentResult(
 
 	if (deferredToolLines.length > 0) {
 		lines.push(...deferredToolLines);
+	}
+
+	if (result.outputPath) {
+		lines.push(
+			`${continuePrefix}${theme.fg("dim", "Report: ")}${fileHyperlink(result.outputPath, theme.fg("dim", `agent://${result.id}`))}${theme.sep.dot}${theme.fg("dim", "alt+a: transcript")}`,
+		);
 	}
 
 	if (result.patchPath && !aborted && result.exitCode === 0) {

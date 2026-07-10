@@ -637,3 +637,22 @@ describe("expanded agent result reports", () => {
 		expect(expanded).not.toContain("more lines");
 	});
 });
+
+describe("agent report hyperlink", () => {
+	it("completed rows with an outputPath render the agent:// report link", () => {
+		const details = resultDetails([
+			makeResult({ id: "Anna", output: "done", outputPath: "/tmp/agents/anna-report.md" }),
+		]);
+		const out = renderTaskBlock(details, { expanded: false, isPartial: false });
+		expect(out).toContain("Report: ");
+		expect(out).toContain("agent://Anna");
+		expect(out).toContain("alt+a: transcript");
+	});
+
+	it("rows without an outputPath render no report link", () => {
+		const details = resultDetails([makeResult({ id: "Anna", output: "done" })]);
+		const out = renderTaskBlock(details, { expanded: false, isPartial: false });
+		expect(out).not.toContain("Report:");
+		expect(out).not.toContain("agent://");
+	});
+});
