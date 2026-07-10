@@ -31,6 +31,7 @@ function makeHarness() {
 		focusAgentSession,
 		unfocusSession,
 		showStatus,
+		renderSubagentList: vi.fn(),
 		canBranchBtw: () => false,
 		canCopyBtw: () => false,
 		ui: {

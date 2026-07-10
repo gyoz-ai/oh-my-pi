@@ -127,6 +127,7 @@ export interface InteractiveModeContext {
 	unfocusSession(): Promise<void>;
 	/** Clear loader, transient HUD/pending containers, streaming state, and pending tools. */
 	clearTransientSessionUi(): void;
+	renderSubagentList(): void;
 	settings: Settings;
 	keybindings: KeybindingsManager;
 	agent: AgentSession["agent"];

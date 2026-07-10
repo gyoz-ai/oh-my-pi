@@ -94,7 +94,7 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
 	type: "text",
 };
-import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import {
 	type AgentSession,
 	type AgentSessionEvent,
@@ -391,6 +391,14 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 	const dot = theme.styledSymbol("status.done", "accent");
 	const visible = running.slice(0, SUBAGENT_HUD_VISIBLE_LIMIT);
 	const hiddenCount = running.length - visible.length;
+	const subOrdinals = new Map<string, number>();
+	let nextOrdinal = 0;
+	for (const ref of AgentRegistry.global().list()) {
+		if (ref.kind === "sub" && ref.parentId === MAIN_AGENT_ID && ref.status !== "aborted") {
+			nextOrdinal += 1;
+			subOrdinals.set(ref.id, nextOrdinal);
+		}
+	}
 	const rows = renderTreeList(
 		{
 			items: visible,
@@ -410,7 +418,31 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 						line += ` ${theme.fg("muted", truncateToWidth(replaceTabs(taskPreview), TRUNCATE_LENGTHS.SHORT))}`;
 					}
 				}
-				return line;
+				const progress = session.progress;
+				if (progress?.status !== "running") return line;
+				const detail = progress.lastIntent?.trim() || progress.currentToolArgs?.trim();
+				const activity = progress.currentTool
+					? detail
+						? `${progress.currentTool}: ${detail}`
+						: progress.currentTool
+					: detail || progress.recentOutput[0]?.trim();
+				const tailBudget = Math.max(TRUNCATE_LENGTHS.SHORT, columns - 8);
+				const extra: string[] = [];
+				if (activity) extra.push(`${theme.tree.hook} ${truncateToWidth(replaceTabs(activity), tailBudget)}`);
+				for (const child of progress.inflightTaskDetails?.progress ?? []) {
+					const childLabel = child.description?.trim() || child.task?.trim() || "";
+					const childLine = `task ${formatTaskId(child.id)} [${child.status}] ${childLabel}`.trimEnd();
+					extra.push(`${theme.tree.hook} ${truncateToWidth(replaceTabs(childLine), tailBudget)}`);
+				}
+				for (const raw of [...progress.recentOutput].reverse().slice(-10)) {
+					extra.push(`  ${truncateToWidth(replaceTabs(raw), tailBudget)}`);
+				}
+				const ordinal = subOrdinals.get(session.id);
+				if (ordinal !== undefined && ordinal <= 9) {
+					extra.push(`${theme.tree.hook} ctrl+k ${ordinal} to stream full output`);
+				}
+				if (extra.length === 0) return line;
+				return [line, ...extra.map(entry => theme.fg("dim", entry))];
 			},
 		},
 		theme,
@@ -1938,7 +1970,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#syncTodoAutoClearTimer();
 		this.#renderTodoList();
-		this.#renderSubagentList();
+		this.renderSubagentList();
 		this.ui.requestRender();
 	}
 
@@ -2037,7 +2069,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * on spawn and the whole block clears itself once the last subagent leaves
 	 * the "active" state.
 	 */
-	#renderSubagentList(): void {
+	renderSubagentList(): void {
 		this.subagentContainer.clear();
 		const lines = renderSubagentHudLines(this.#observerRegistry.getSessions(), this.ui.terminal.columns);
 		if (lines.length === 0) return;

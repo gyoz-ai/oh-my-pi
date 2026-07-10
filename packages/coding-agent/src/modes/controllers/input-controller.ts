@@ -1926,6 +1926,7 @@ export class InputController {
 
 	setToolsExpanded(expanded: boolean): void {
 		this.ctx.toolOutputExpanded = expanded;
+		this.ctx.renderSubagentList();
 		for (const child of this.ctx.chatContainer.children) {
 			if (isExpandable(child)) {
 				child.setExpanded(expanded);

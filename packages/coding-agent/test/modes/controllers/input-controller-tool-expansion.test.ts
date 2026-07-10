@@ -8,16 +8,19 @@ describe("InputController tool output expansion", () => {
 		const inert = { render: vi.fn(() => []) };
 		const requestRender = vi.fn();
 		const resetDisplay = vi.fn();
+		const renderSubagentList = vi.fn();
 		const ctx = {
 			toolOutputExpanded: false,
 			chatContainer: { children: [expandable, inert] },
 			ui: { requestRender, resetDisplay },
+			renderSubagentList,
 		} as unknown as InteractiveModeContext;
 
 		new InputController(ctx).toggleToolOutputExpansion();
 
 		expect(ctx.toolOutputExpanded).toBe(true);
 		expect(expandable.setExpanded).toHaveBeenCalledWith(true);
+		expect(renderSubagentList).toHaveBeenCalledTimes(1);
 		// resetDisplay() is the only path that retires the transcript's frozen
 		// block snapshots and re-emits the whole transcript at its new heights.
 		// A plain requestRender would replay the stale (collapsed) snapshots.

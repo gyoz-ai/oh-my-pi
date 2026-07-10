@@ -16,6 +16,7 @@ import {
 	SessionObserverRegistry,
 } from "@oh-my-pi/pi-coding-agent/modes/session-observer-registry";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -302,5 +303,70 @@ describe("InteractiveMode subagent observer UI sync", () => {
 		expect(hud).toContain("BurstAgent5: Burst job 5");
 		expect(rebuildHud).toHaveBeenCalledTimes(1);
 		expect(requestRender).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("subagent HUD activity tails", () => {
+	beforeAll(async () => {
+		await initTheme();
+	});
+
+	it("running rows carry one dim tool: intent activity line", () => {
+		const out = render([
+			makeSession({
+				id: "AuthLoader",
+				description: "auth work",
+				progress: makeProgress({ id: "AuthLoader", currentTool: "grep", lastIntent: "Scanning auth flows" }),
+			}),
+		]);
+		expect(out).toContain("grep: Scanning auth flows");
+	});
+
+	it("activity falls back to the newest recent output line and tails older output", () => {
+		const out = render([
+			makeSession({
+				id: "Worker",
+				description: "job",
+				progress: makeProgress({ id: "Worker", recentOutput: ["newest output line", "older output line"] }),
+			}),
+		]);
+		expect(out).toContain("newest output line");
+		expect(out).toContain("older output line");
+	});
+
+	it("rows add nested task lines, an output tail, and the ctrl+k hint without expansion", () => {
+		AgentRegistry.resetGlobalForTests();
+		const registry = AgentRegistry.global();
+		registry.register({ id: "Main", displayName: "Main", kind: "main", session: null });
+		registry.register({ id: "Worker", displayName: "Worker", kind: "sub", parentId: "Main", session: null });
+		const progress = makeProgress({
+			id: "Worker",
+			currentTool: "bash",
+			lastIntent: "Running tests",
+			recentOutput: ["tail newest", "tail older"],
+			inflightTaskDetails: {
+				projectAgentsDir: null,
+				results: [],
+				totalDurationMs: 0,
+				progress: [makeProgress({ id: "Worker.Kid", description: "child job" })],
+			},
+		});
+		const sessions = [makeSession({ id: "Worker", description: "job", progress })];
+		const out = Bun.stripANSI(renderSubagentHudLines(sessions, 120).join("\n"));
+		expect(out).toContain("bash: Running tests");
+		expect(out).toContain("task Worker>Kid [running] child job");
+		expect(out).toContain("tail older");
+		expect(out).toContain("tail newest");
+		expect(out).toContain("ctrl+k 1 to stream full output");
+	});
+
+	it("rows without a registry ordinal render no stream hint", () => {
+		AgentRegistry.resetGlobalForTests();
+		const sessions = [
+			makeSession({ id: "Ghost", description: "job", progress: makeProgress({ id: "Ghost", currentTool: "read" }) }),
+		];
+		const out = Bun.stripANSI(renderSubagentHudLines(sessions, 120).join("\n"));
+		expect(out).toContain("read");
+		expect(out).not.toContain("ctrl+k");
 	});
 });
