@@ -21,7 +21,6 @@ import {
 	formatMoreItems,
 	formatStatusIcon,
 	previewLine,
-	previewWindowRows,
 	replaceTabs,
 	type ToolUIStatus,
 	truncateToWidth,
@@ -1085,9 +1084,8 @@ function renderAgentProgress(
 		}
 	}
 
-	// Expanded view: recent output and tools
-	if (expanded && progress.status === "running") {
-		const previewRows = previewWindowRows();
+	if (progress.status === "running") {
+		const previewRows = expanded ? 30 : 5;
 		const output = capPreviewLines(
 			sanitizeRecentOutput([...progress.recentOutput].reverse().join("\n")).split("\n"),
 			theme,
@@ -1096,7 +1094,7 @@ function renderAgentProgress(
 				expandHint: false,
 			},
 		).join("\n");
-		lines.push(...renderOutputSection(output, continuePrefix, expanded, theme, 2, previewRows));
+		lines.push(...renderOutputSection(output, continuePrefix, expanded, theme, previewRows, previewRows));
 	}
 
 	return lines;

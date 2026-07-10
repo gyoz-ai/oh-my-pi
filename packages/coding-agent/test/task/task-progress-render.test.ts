@@ -1,10 +1,57 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
 import type { SettingPath, SettingValue } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { renderResult } from "@oh-my-pi/pi-coding-agent/task/render";
 import { taskToolRenderer } from "@oh-my-pi/pi-coding-agent/task/renderer";
 import type { AgentProgress, SingleResult, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task/types";
+
+let uiTheme: Theme;
+
+beforeAll(async () => {
+	await Settings.init({ inMemory: true, cwd: process.cwd() });
+	const loaded = await getThemeByName("dark");
+	expect(loaded).toBeDefined();
+	uiTheme = loaded!;
+});
+
+function makeProgress(overrides: Partial<AgentProgress> & { id: string }): AgentProgress {
+	return {
+		index: 0,
+		agent: "task",
+		agentSource: "bundled",
+		status: "running",
+		task: "investigate the auth flow",
+		recentTools: [],
+		recentOutput: [],
+		toolCount: 0,
+		requests: 0,
+		tokens: 0,
+		cost: 0,
+		durationMs: 0,
+		...overrides,
+	};
+}
+
+function progressDetails(progress: AgentProgress[]): TaskToolDetails {
+	return {
+		projectAgentsDir: null,
+		results: [],
+		totalDurationMs: 0,
+		progress,
+	};
+}
+
+function renderTaskBlock(details: TaskToolDetails, options: { expanded: boolean; isPartial?: boolean }): string {
+	const component = renderResult(
+		{ content: [{ type: "text", text: "" }], details },
+		{ expanded: options.expanded, isPartial: options.isPartial ?? true, spinnerFrame: 0 },
+		uiTheme,
+	);
+	return stripVTControlCharacters(component.render(120).join("\n"));
+}
 
 function runningProgress(overrides: Partial<AgentProgress> = {}): AgentProgress {
 	return {
@@ -65,7 +112,6 @@ describe("task progress rendering", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		resetSettingsForTest();
 	});
 	it("renders running task rows static with the agent dot", async () => {
 		const theme = (await getThemeByName("dark"))!;
@@ -452,7 +498,6 @@ describe("task result detail-less state", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
-		resetSettingsForTest();
 	});
 
 	it("renders a validation failure with the error glyph, not a success bullet", async () => {
@@ -491,5 +536,33 @@ describe("task result detail-less state", () => {
 
 		expect(stripped).toContain(theme.status.done);
 		expect(stripped).not.toContain(theme.status.error);
+	});
+});
+
+describe("running agent live output tail", () => {
+	const recentOutput = Array.from({ length: 8 }, (_, index) => `tail line ${8 - index}`);
+
+	it("collapsed running rows show a 5-row tail of recent output", () => {
+		const details = progressDetails([makeProgress({ id: "Anna", recentOutput })]);
+		const out = renderTaskBlock(details, { expanded: false });
+		expect(out).toContain("Output");
+		expect(out).toContain("tail line 8");
+		expect(out).toContain("tail line 5");
+		expect(out).not.toContain("tail line 4");
+		expect(out).toContain("4 earlier lines");
+	});
+
+	it("expanded running rows show the full recent output window", () => {
+		const details = progressDetails([makeProgress({ id: "Anna", recentOutput })]);
+		const out = renderTaskBlock(details, { expanded: true });
+		expect(out).toContain("tail line 1");
+		expect(out).toContain("tail line 8");
+		expect(out).not.toContain("earlier lines");
+	});
+
+	it("finished rows render no output tail", () => {
+		const details = progressDetails([makeProgress({ id: "Anna", status: "completed", recentOutput })]);
+		const out = renderTaskBlock(details, { expanded: false });
+		expect(out).not.toContain("tail line 8");
 	});
 });

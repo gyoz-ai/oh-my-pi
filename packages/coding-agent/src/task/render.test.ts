@@ -148,15 +148,14 @@ describe("task live progress rendering", () => {
 		expect(text).not.toContain("more lines");
 	});
 
-	it("keeps the newest subagent output when the viewport cap truncates", () => {
-		setViewportRows(24);
+	it("keeps the newest subagent output when the collapsed tail cap truncates", () => {
 		const chronological = Array.from({ length: 8 }, (_, index) => `line ${index + 1}`);
-		const text = renderProgressText(makeProgress([...chronological].reverse()), true, uiTheme);
+		const text = renderProgressText(makeProgress([...chronological].reverse()), false, uiTheme);
 
-		expect(text).toContain("… 3 earlier lines");
+		expect(text).toContain("… 4 earlier lines");
 		expect(text).not.toContain("line 1");
-		expect(text).not.toContain("line 3");
-		expect(text).toContain("line 4");
+		expect(text).not.toContain("line 4");
+		expect(text).toContain("line 5");
 		expect(text).toContain("line 8");
 	});
 
