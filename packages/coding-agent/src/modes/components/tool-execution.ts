@@ -1429,16 +1429,21 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		}
 
 		const outputLines = textContent.split("\n");
-		const maxOutputLines = this.#expanded ? 12 : 4;
-		const displayLines = outputLines.slice(0, maxOutputLines);
+		const maxOutputLines = this.#expanded ? 100 : 4;
+		const hiddenCount = Math.max(0, outputLines.length - maxOutputLines);
+		const displayLines = this.#expanded ? outputLines.slice(-maxOutputLines) : outputLines.slice(0, maxOutputLines);
 
+		if (this.#expanded && hiddenCount > 0) {
+			lines.push(theme.fg("dim", `… ${hiddenCount} earlier lines`));
+		}
 		for (const line of displayLines) {
 			lines.push(theme.fg("toolOutput", truncateToWidth(replaceTabs(line), contentWidth)));
 		}
 
-		if (outputLines.length > maxOutputLines) {
-			const remaining = outputLines.length - maxOutputLines;
-			lines.push(`${theme.fg("dim", `… ${remaining} more lines`)} ${formatExpandHint(theme, this.#expanded, true)}`);
+		if (!this.#expanded && hiddenCount > 0) {
+			lines.push(
+				`${theme.fg("dim", `… ${hiddenCount} more lines`)} ${formatExpandHint(theme, this.#expanded, true)}`,
+			);
 		} else if (!this.#expanded) {
 			lines.push(formatExpandHint(theme, this.#expanded, true));
 		}
