@@ -656,3 +656,51 @@ describe("agent report hyperlink", () => {
 		expect(out).not.toContain("agent://");
 	});
 });
+
+describe("expanded multi-agent progress compaction", () => {
+	const longOutput = Array.from({ length: 15 }, (_, index) => `tail line ${15 - index}`);
+
+	it("expanded keeps registration order while collapsed folds finished rows first", () => {
+		const details = progressDetails([
+			makeProgress({ id: "Bob", description: "live work", recentOutput: longOutput }),
+			makeProgress({ id: "Anna", description: "finished work", status: "completed" }),
+		]);
+
+		const collapsed = renderTaskBlock(details, { expanded: false });
+		expect(collapsed.indexOf("Anna")).toBeLessThan(collapsed.indexOf("Bob"));
+
+		const expanded = renderTaskBlock(details, { expanded: true });
+		expect(expanded.indexOf("Bob")).toBeLessThan(expanded.indexOf("Anna"));
+	});
+
+	it("expanded multi-agent running rows compact to a 10-line tail without assignment re-print", () => {
+		const details = progressDetails([
+			makeProgress({
+				id: "Bob",
+				description: "live work",
+				assignment: "assignment marker bob",
+				recentOutput: longOutput,
+			}),
+			makeProgress({ id: "Anna", status: "completed" }),
+		]);
+		const out = renderTaskBlock(details, { expanded: true });
+		expect(out).not.toContain("assignment marker bob");
+		expect(out).toContain("tail line 15");
+		expect(out).toContain("6 earlier lines");
+	});
+
+	it("expanded single-agent rows keep the assignment and the full tail window", () => {
+		const details = progressDetails([
+			makeProgress({
+				id: "Bob",
+				description: "live work",
+				assignment: "assignment marker bob",
+				recentOutput: longOutput,
+			}),
+		]);
+		const out = renderTaskBlock(details, { expanded: true });
+		expect(out).toContain("assignment marker bob");
+		expect(out).toContain("tail line 1");
+		expect(out).not.toContain("earlier lines");
+	});
+});

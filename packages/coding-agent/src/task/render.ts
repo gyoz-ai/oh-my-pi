@@ -915,6 +915,7 @@ function renderAgentProgress(
 	frozen = false,
 	seenNestedTasks?: WeakSet<object>,
 	nestedDepth = 0,
+	multiAgent = false,
 ): string[] {
 	const lines: string[] = [];
 
@@ -980,7 +981,8 @@ function renderAgentProgress(
 
 	lines.push(statusLine);
 
-	lines.push(...renderTaskSection(progress.assignment ?? progress.task, continuePrefix, expanded, theme));
+	if (!multiAgent)
+		lines.push(...renderTaskSection(progress.assignment ?? progress.task, continuePrefix, expanded, theme));
 
 	// Current tool (if running) or most recent completed tool
 	if (progress.status === "running") {
@@ -1007,6 +1009,19 @@ function renderAgentProgress(
 			}
 			lines.push(toolLine);
 		}
+	}
+
+	if (multiAgent && expanded && progress.status === "running") {
+		const output = capPreviewLines(
+			sanitizeRecentOutput([...progress.recentOutput].reverse().join("\n")).split("\n"),
+			theme,
+			{
+				max: 10,
+				expandHint: false,
+			},
+		).join("\n");
+		lines.push(...renderOutputSection(output, continuePrefix, expanded, theme, 10, 10));
+		return lines;
 	}
 
 	// Retry detail line: surface why the subagent is paused and roughly how
@@ -1608,17 +1623,26 @@ export function renderResult(
 		const shouldRenderProgress =
 			Boolean(details.progress && details.progress.length > 0) && details.results.length === 0;
 		if (shouldRenderProgress && details.progress) {
-			const ordered = orderProgressForDisplay(details.progress);
-			// Collapsed view keeps the live edge: finished rows sort to the top of
-			// the display order, so folding from the top keeps running/pending
-			// agents (and their current-tool lines) visible while one summary line
-			// stands in for everything above it.
+			const ordered = expanded ? details.progress : orderProgressForDisplay(details.progress);
 			const visible = expanded ? ordered : ordered.slice(Math.max(0, ordered.length - COLLAPSED_AGENT_LIMIT));
 			if (visible.length < ordered.length) {
 				lines.push(formatHiddenProgressLine(ordered.slice(0, ordered.length - visible.length), theme));
 			}
 			for (const progress of visible) {
-				lines.push(...renderAgentProgress(progress, "", "  ", expanded, theme, spinnerFrame, frozen));
+				lines.push(
+					...renderAgentProgress(
+						progress,
+						"",
+						"  ",
+						expanded,
+						theme,
+						spinnerFrame,
+						frozen,
+						undefined,
+						0,
+						ordered.length > 1,
+					),
+				);
 			}
 		} else if (details.results && details.results.length > 0) {
 			const ordered = orderResultsForDisplay(details.results);
