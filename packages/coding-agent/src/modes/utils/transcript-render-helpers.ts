@@ -67,16 +67,18 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): TranscriptB
 		const jobId = job.jobId ?? "unknown";
 		const typeLabel = job.type ? `[${job.type}]` : "[job]";
 		const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
-		const line = [
-			theme.fg("success", `${theme.status.done} Background job completed`),
-			theme.fg("dim", typeLabel),
-			theme.fg("accent", jobId),
-			duration ? theme.fg("dim", `(${duration})`) : undefined,
-		]
-			.filter(Boolean)
-			.join(" ");
+		const clickable = job.type === "task" && !!job.jobId;
+		const line =
+			[
+				theme.fg("success", `${theme.status.done} Background job completed`),
+				theme.fg("dim", typeLabel),
+				theme.fg("accent", jobId),
+				duration ? theme.fg("dim", `(${duration})`) : undefined,
+			]
+				.filter(Boolean)
+				.join(" ") + (clickable ? theme.fg("dim", " (click here to see output)") : "");
 		block.addChild(new Text(line, 1, 0));
-		agentIdsByRow.push(job.type === "task" && job.jobId ? job.jobId : undefined);
+		agentIdsByRow.push(clickable ? job.jobId : undefined);
 	}
 	return block;
 }

@@ -1,6 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
-import { assistantUsageIsBilled } from "./transcript-render-helpers";
+import { Text } from "@oh-my-pi/pi-tui";
+import type { CustomMessage } from "../../session/messages";
+import { initTheme } from "../theme/theme";
+import { assistantUsageIsBilled, buildAsyncResultBlock } from "./transcript-render-helpers";
 
 function usage(overrides: Partial<Usage> = {}): Usage {
 	return {
@@ -34,5 +37,53 @@ describe("assistantUsageIsBilled", () => {
 		const emptyFreeMessage: Pick<AssistantMessage, "usage"> = { usage: usage() };
 		expect(assistantUsageIsBilled(emptyBilledMessage.usage)).toBe(true);
 		expect(assistantUsageIsBilled(emptyFreeMessage.usage)).toBe(false);
+	});
+});
+
+function asyncResultMessage(details: Record<string, unknown>): CustomMessage {
+	return {
+		role: "custom",
+		customType: "async-result",
+		content: "",
+		display: true,
+		details,
+		timestamp: Date.now(),
+	};
+}
+
+describe("buildAsyncResultBlock", () => {
+	beforeAll(async () => {
+		await initTheme();
+	});
+
+	it("makes a task-typed row a click target and appends the click-here hint", () => {
+		const block = buildAsyncResultBlock(asyncResultMessage({ jobId: "task-1", type: "task", label: "explore" }));
+		expect(block.agentIdAtLocalRow(0)).toBe("task-1");
+		const line = Bun.stripANSI((block.children[0] as Text).getText());
+		expect(line).toContain("Background job completed");
+		expect(line).toContain("(click here to see output)");
+	});
+
+	it("leaves a bash-typed row unclickable with no hint", () => {
+		const block = buildAsyncResultBlock(asyncResultMessage({ jobId: "bash-1", type: "bash" }));
+		expect(block.agentIdAtLocalRow(0)).toBeUndefined();
+		const line = Bun.stripANSI((block.children[0] as Text).getText());
+		expect(line).toContain("Background job completed");
+		expect(line).not.toContain("click here");
+	});
+
+	it("resolves each row independently in a mixed batch", () => {
+		const block = buildAsyncResultBlock(
+			asyncResultMessage({
+				jobs: [
+					{ jobId: "task-1", type: "task" },
+					{ jobId: "bash-1", type: "bash" },
+				],
+			}),
+		);
+		expect(block.agentIdAtLocalRow(0)).toBe("task-1");
+		expect(block.agentIdAtLocalRow(1)).toBeUndefined();
+		expect(Bun.stripANSI((block.children[0] as Text).getText())).toContain("(click here to see output)");
+		expect(Bun.stripANSI((block.children[1] as Text).getText())).not.toContain("click here");
 	});
 });
