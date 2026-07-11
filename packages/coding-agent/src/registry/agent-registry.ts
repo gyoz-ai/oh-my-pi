@@ -215,3 +215,9 @@ export class AgentRegistry {
 		}
 	}
 }
+
+export function listMainSubagentOrdinals(): AgentRef[] {
+	return AgentRegistry.global()
+		.list()
+		.filter(ref => ref.kind === "sub" && ref.parentId === MAIN_AGENT_ID && ref.status === "running");
+}

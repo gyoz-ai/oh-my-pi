@@ -210,8 +210,8 @@ describe("maybeCreateHerdrSubagentReporter", () => {
 		emitLifecycle({ id: "gamma", status: "started", index: 2 });
 		await waitFrames(1);
 		expect(frames[0].params.subagents).toEqual([
-			{ id: "alpha", agent: "task", status: "working", index: 1 },
-			{ id: "beta", agent: "task", status: "working", index: 0 },
+			{ id: "alpha", agent: "task", status: "working", index: 2 },
+			{ id: "beta", agent: "task", status: "working", index: 1 },
 			{ id: "gamma", agent: "task", status: "working", index: 2 },
 		]);
 	});
