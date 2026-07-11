@@ -49,11 +49,10 @@ function makeHarness() {
 	const controller = new InputController(ctx);
 	controller.setupKeyHandlers();
 	const feed = (data: string) => listeners.some(listener => listener(data)?.consume === true);
-	const pressKey = (key: string) => customKeyHandlers.get(key)?.();
-	return { ctx, controller, feed, pressKey, focusAgentSession, unfocusSession, showStatus };
+	return { ctx, controller, feed, focusAgentSession, unfocusSession, showStatus };
 }
 
-describe("subagent focus via deep-focus sequence and ctrl+k chord", () => {
+describe("subagent focus via deep-focus sequence", () => {
 	beforeAll(async () => {
 		await Settings.init({ inMemory: true, cwd: process.cwd() });
 	});
@@ -77,82 +76,95 @@ describe("subagent focus via deep-focus sequence and ctrl+k chord", () => {
 		registry.register({ id: "Anna.Kid", displayName: "Anna.Kid", kind: "sub", parentId: "Anna", session: null });
 	});
 
-	it("focuses the Nth non-aborted subagent when the deep-focus sequence arrives", () => {
+	it("focuses the subagent by seq when the deep-focus sequence arrives", () => {
 		const { feed, focusAgentSession } = makeHarness();
-		expect(feed("\x1b[>8365;1F")).toBe(true);
-		expect(focusAgentSession).toHaveBeenCalledWith("Anna");
 		expect(feed("\x1b[>8365;2F")).toBe(true);
+		expect(focusAgentSession).toHaveBeenCalledWith("Anna");
+		expect(feed("\x1b[>8365;4F")).toBe(true);
 		expect(focusAgentSession).toHaveBeenCalledWith("Bob");
 		expect(focusAgentSession).toHaveBeenCalledTimes(2);
 	});
 
-	it("shows a status message when the sequence ordinal has no subagent", () => {
+	it("shows a status message when the seq has no subagent", () => {
 		const { feed, focusAgentSession, showStatus } = makeHarness();
-		expect(feed("\x1b[>8365;7F")).toBe(true);
+		expect(feed("\x1b[>8365;99F")).toBe(true);
 		expect(focusAgentSession).not.toHaveBeenCalled();
-		expect(showStatus).toHaveBeenCalledWith("No subagent #7 to view");
+		expect(showStatus).toHaveBeenCalledWith("No subagent #99 to view");
 	});
 
 	it("deep-focus while focused unfocuses first and resolves against the main registry", async () => {
 		const { ctx, feed, focusAgentSession, unfocusSession } = makeHarness();
 		const focusable = ctx as unknown as { focusedAgentId: string | undefined };
 		focusable.focusedAgentId = "Bob";
-		expect(feed("\x1b[>8365;1F")).toBe(true);
+		expect(feed("\x1b[>8365;2F")).toBe(true);
 		for (let i = 0; i < 5; i++) await Promise.resolve();
 		expect(unfocusSession).toHaveBeenCalledTimes(1);
 		expect(focusAgentSession).toHaveBeenCalledWith("Anna");
 	});
 
-	it("stops the Nth subagent when the stop sequence arrives", async () => {
+	it("stops the subagent by seq when the stop sequence arrives", async () => {
 		const { feed, focusAgentSession, showStatus } = makeHarness();
-		expect(feed("\x1b[>8365;1K")).toBe(true);
+		expect(feed("\x1b[>8365;2K")).toBe(true);
 		for (let i = 0; i < 5; i++) await Promise.resolve();
 		expect(AgentRegistry.global().get("Anna")).toBeUndefined();
 		expect(showStatus).toHaveBeenCalledWith("Stopped agent Anna");
 		expect(focusAgentSession).not.toHaveBeenCalled();
 	});
 
-	it("shows a status message when the stop ordinal has no subagent", () => {
+	it("shows a status message when the stop seq has no subagent", () => {
 		const { feed, showStatus } = makeHarness();
-		expect(feed("\x1b[>8365;7K")).toBe(true);
-		expect(showStatus).toHaveBeenCalledWith("No subagent #7 to stop");
+		expect(feed("\x1b[>8365;99K")).toBe(true);
+		expect(showStatus).toHaveBeenCalledWith("No subagent #99 to stop");
 	});
 
-	it("digits pass through when the chord window is not armed", () => {
+	it("keeps a finished subagent's seq resolvable and never recycles it for a later registration", async () => {
+		const registry = AgentRegistry.global();
+		expect(registry.get("Bob")!.seq).toBe(4);
+		registry.setStatus("Bob", "idle");
 		const { feed, focusAgentSession } = makeHarness();
-		expect(feed("1")).toBe(false);
-		expect(focusAgentSession).not.toHaveBeenCalled();
-	});
-
-	it("ctrl+k arms a one-shot digit chord that focuses the Nth subagent", () => {
-		const { feed, pressKey, focusAgentSession } = makeHarness();
-		pressKey("ctrl+k");
-		expect(feed("2")).toBe(true);
+		expect(feed("\x1b[>8365;4F")).toBe(true);
 		expect(focusAgentSession).toHaveBeenCalledWith("Bob");
-		expect(feed("1")).toBe(false);
-		expect(focusAgentSession).toHaveBeenCalledTimes(1);
+		const zed = registry.register({ id: "Zed", displayName: "Zed", kind: "sub", parentId: "Main", session: null });
+		expect(zed.seq).toBe(7);
+		expect(feed(`\x1b[>8365;${zed.seq}F`)).toBe(true);
+		expect(focusAgentSession).toHaveBeenCalledWith("Zed");
 	});
 
-	it("any non-digit input disarms the chord window", () => {
-		const { feed, pressKey, focusAgentSession } = makeHarness();
-		pressKey("ctrl+k");
-		expect(feed("x")).toBe(false);
-		expect(feed("1")).toBe(false);
-		expect(focusAgentSession).not.toHaveBeenCalled();
+	it("parses a multi-digit seq from the CSI", () => {
+		const { feed, showStatus } = makeHarness();
+		expect(feed("\x1b[>8365;12F")).toBe(true);
+		expect(showStatus).toHaveBeenCalledWith("No subagent #12 to view");
 	});
 
-	it("the deep-focus sequence works without arming and needs no expansion toggle", () => {
+	it("resolves a subagent whose seq is multi-digit via the CSI", () => {
+		const registry = AgentRegistry.global();
+		for (let i = 0; i < 5; i++) {
+			registry.register({
+				id: `filler-${i}`,
+				displayName: `filler-${i}`,
+				kind: "sub",
+				parentId: "Main",
+				session: null,
+			});
+		}
+		const doubleDigit = registry.register({
+			id: "DoubleDigit",
+			displayName: "DoubleDigit",
+			kind: "sub",
+			parentId: "Main",
+			session: null,
+		});
+		expect(doubleDigit.seq).toBe(12);
+		const { feed, focusAgentSession } = makeHarness();
+		expect(feed(`\x1b[>8365;${doubleDigit.seq}F`)).toBe(true);
+		expect(focusAgentSession).toHaveBeenCalledWith("DoubleDigit");
+	});
+
+	it("the deep-focus sequence works without needing an expansion toggle", () => {
 		const { ctx, feed, focusAgentSession } = makeHarness();
 		expect(ctx.toolOutputExpanded).toBe(false);
-		expect(feed("\x1b[>8365;2F")).toBe(true);
+		expect(feed("\x1b[>8365;4F")).toBe(true);
 		expect(focusAgentSession).toHaveBeenCalledWith("Bob");
 		expect(ctx.toolOutputExpanded).toBe(false);
-	});
-
-	it("the expansion toggle no longer arms the digit chord", () => {
-		const { controller, feed, focusAgentSession } = makeHarness();
-		controller.toggleToolOutputExpansion();
-		expect(feed("1")).toBe(false);
-		expect(focusAgentSession).not.toHaveBeenCalled();
 	});
 });

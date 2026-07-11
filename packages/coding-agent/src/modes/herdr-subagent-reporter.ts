@@ -1,10 +1,18 @@
 import { createConnection } from "node:net";
 import { $env } from "@oh-my-pi/pi-utils";
-import { listMainSubagentOrdinals } from "../registry/agent-registry";
+import { AgentRegistry } from "../registry/agent-registry";
 import type { SessionObserverRegistry } from "./session-observer-registry";
+
+export interface HerdrFocusAndTitleSource {
+	getFocusedAgentId(): string | undefined;
+	onFocusChanged(cb: () => void): () => void;
+	getSessionTitle(): string | undefined;
+	onSessionTitleChanged(cb: () => void): () => void;
+}
 
 export function maybeCreateHerdrSubagentReporter(
 	registry: SessionObserverRegistry,
+	focusAndTitle?: HerdrFocusAndTitleSource,
 ): { dispose(): Promise<void> } | undefined {
 	const socketPath = $env.HERDR_SOCKET_PATH;
 	const paneId = $env.HERDR_PANE_ID;
@@ -17,7 +25,7 @@ export function maybeCreateHerdrSubagentReporter(
 			agent: string;
 			status: "working" | "done" | "failed";
 			description: string | undefined;
-			index: number;
+			agent_seq: number;
 		}
 	>();
 	let seq = Date.now() * 1000;
@@ -28,10 +36,18 @@ export function maybeCreateHerdrSubagentReporter(
 
 	const transmit = (subagents: unknown[]): Promise<void> => {
 		seq += 1;
+		const focusedAgentId = focusAndTitle?.getFocusedAgentId();
 		const frame = `${JSON.stringify({
 			id: `custom:omp-subagents:${seq}`,
 			method: "pane.report_subagents",
-			params: { pane_id: paneId, source: "custom:omp-subagents", seq, subagents },
+			params: {
+				pane_id: paneId,
+				source: "custom:omp-subagents",
+				seq,
+				subagents,
+				focused_agent_seq: focusedAgentId ? AgentRegistry.global().get(focusedAgentId)?.seq : undefined,
+				session_title: focusAndTitle?.getSessionTitle(),
+			},
 		})}\n`;
 		const { promise, resolve } = Promise.withResolvers<void>();
 		let done = false;
@@ -93,10 +109,6 @@ export function maybeCreateHerdrSubagentReporter(
 		if (!anyRetainedWorking && sessions.some(s => s.status === "active" && !rows.has(s.id))) {
 			rows.clear();
 		}
-		const ordinals = new Map<string, number>();
-		listMainSubagentOrdinals().forEach((ref, index) => {
-			ordinals.set(ref.id, index + 1);
-		});
 		for (const session of sessions) {
 			const status = session.status === "active" ? "working" : session.status === "completed" ? "done" : "failed";
 			if (status !== "working" && !rows.has(session.id)) continue;
@@ -105,11 +117,13 @@ export function maybeCreateHerdrSubagentReporter(
 				agent: session.agent ?? "task",
 				status,
 				description: session.description,
-				index: ordinals.get(session.id) ?? session.index ?? 0,
+				agent_seq: AgentRegistry.global().get(session.id)?.seq ?? 0,
 			});
 		}
 		scheduleFlush();
 	});
+	const unsubscribeFocus = focusAndTitle?.onFocusChanged(scheduleFlush);
+	const unsubscribeTitle = focusAndTitle?.onSessionTitleChanged(scheduleFlush);
 
 	return {
 		dispose: async () => {
@@ -117,6 +131,8 @@ export function maybeCreateHerdrSubagentReporter(
 			disposed = true;
 			flushGen += 1;
 			unsubscribe();
+			unsubscribeFocus?.();
+			unsubscribeTitle?.();
 			rows.clear();
 			await send([]);
 		},

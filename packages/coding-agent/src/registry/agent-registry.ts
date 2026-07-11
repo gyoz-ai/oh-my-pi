@@ -32,6 +32,7 @@ export type AgentKind = "main" | "sub" | "advisor";
 
 export interface AgentRef {
 	id: string;
+	seq: number;
 	displayName: string;
 	kind: AgentKind;
 	parentId?: string;
@@ -81,6 +82,7 @@ export class AgentRegistry {
 
 	readonly #refs = new Map<string, AgentRef>();
 	readonly #listeners = new Set<RegistryListener>();
+	#nextSeq = 1;
 
 	#matchesExpected(ref: AgentRef, expected?: AgentRefExpectation): boolean {
 		return expected === undefined || ref === expected || ref.session === expected;
@@ -90,6 +92,7 @@ export class AgentRegistry {
 		const now = Date.now();
 		const ref: AgentRef = {
 			id: input.id,
+			seq: this.#nextSeq++,
 			displayName: input.displayName,
 			kind: input.kind,
 			parentId: input.parentId,
@@ -185,6 +188,13 @@ export class AgentRegistry {
 		return this.#refs.get(id);
 	}
 
+	getBySeq(seq: number): AgentRef | undefined {
+		for (const ref of this.#refs.values()) {
+			if (ref.seq === seq) return ref;
+		}
+		return undefined;
+	}
+
 	list(): AgentRef[] {
 		return [...this.#refs.values()];
 	}
@@ -214,10 +224,4 @@ export class AgentRegistry {
 			}
 		}
 	}
-}
-
-export function listMainSubagentOrdinals(): AgentRef[] {
-	return AgentRegistry.global()
-		.list()
-		.filter(ref => ref.kind === "sub" && ref.parentId === MAIN_AGENT_ID && ref.status === "running");
 }

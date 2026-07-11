@@ -1,11 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import {
-	AgentRegistry,
-	listMainSubagentOrdinals,
-	MAIN_AGENT_ID,
-} from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 
-describe("listMainSubagentOrdinals", () => {
+describe("AgentRegistry seq", () => {
 	let registry: AgentRegistry;
 
 	beforeEach(() => {
@@ -21,55 +17,32 @@ describe("listMainSubagentOrdinals", () => {
 		return registry.register({ id, displayName: id, kind: "sub", parentId: MAIN_AGENT_ID, session: null, status });
 	}
 
-	it("assigns compact 1-based ordinals to running MAIN subagents in registration order", () => {
-		registerSub("alpha");
-		registerSub("beta");
-		registerSub("gamma");
-
-		expect(listMainSubagentOrdinals().map(ref => ref.id)).toEqual(["alpha", "beta", "gamma"]);
+	it("assigns a monotonically increasing seq in registration order", () => {
+		const alpha = registerSub("alpha");
+		const beta = registerSub("beta");
+		const gamma = registerSub("gamma");
+		expect([alpha.seq, beta.seq, gamma.seq]).toEqual([2, 3, 4]);
 	});
 
-	it("excludes idle, parked, and aborted agents from the ordinal source", () => {
-		registerSub("alpha", "idle");
-		registerSub("beta");
-		registerSub("gamma", "parked");
-		registerSub("delta", "aborted");
-		registerSub("epsilon");
-
-		expect(listMainSubagentOrdinals().map(ref => ref.id)).toEqual(["beta", "epsilon"]);
-	});
-
-	it("excludes the main agent and subagents parented to a non-MAIN agent", () => {
-		registerSub("alpha");
-		registry.register({
-			id: "nested-parent",
-			displayName: "nested-parent",
-			kind: "sub",
-			parentId: MAIN_AGENT_ID,
-			session: null,
-		});
-		registry.register({
-			id: "nested-child",
-			displayName: "nested-child",
-			kind: "sub",
-			parentId: "nested-parent",
-			session: null,
-		});
-
-		expect(listMainSubagentOrdinals().map(ref => ref.id)).toEqual(["alpha", "nested-parent"]);
-	});
-
-	it("recycles a finished agent's digit and compacts the remaining ordinals down, while it stays reachable by id", () => {
-		registerSub("alpha");
-		registerSub("beta");
-		registerSub("gamma");
-		expect(listMainSubagentOrdinals().map(ref => ref.id)).toEqual(["alpha", "beta", "gamma"]);
-
+	it("never recycles a finished agent's seq for a later registration", () => {
+		const alpha = registerSub("alpha");
+		const beta = registerSub("beta");
 		registry.setStatus("beta", "idle");
-
-		const ordinals = listMainSubagentOrdinals();
-		expect(ordinals.map(ref => ref.id)).toEqual(["alpha", "gamma"]);
-		expect(ordinals.findIndex(ref => ref.id === "gamma") + 1).toBe(2);
+		const gamma = registerSub("gamma");
+		expect(gamma.seq).toBeGreaterThan(beta.seq);
+		expect(gamma.seq).toBeGreaterThan(alpha.seq);
 		expect(registry.get("beta")?.status).toBe("idle");
+	});
+
+	it("resolves any registered status by seq via getBySeq", () => {
+		const alpha = registerSub("alpha");
+		const beta = registerSub("beta", "parked");
+		expect(registry.getBySeq(alpha.seq)?.id).toBe("alpha");
+		expect(registry.getBySeq(beta.seq)?.id).toBe("beta");
+	});
+
+	it("returns undefined from getBySeq for an unassigned seq", () => {
+		registerSub("alpha");
+		expect(registry.getBySeq(999)).toBeUndefined();
 	});
 });

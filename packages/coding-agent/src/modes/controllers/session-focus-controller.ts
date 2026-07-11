@@ -20,6 +20,7 @@ export class SessionFocusController {
 	/** Session currently attached while focused; undefined when unfocused. */
 	#attachedSession: AgentSession | undefined;
 	#registryUnsubscribe: (() => void) | undefined;
+	#focusListeners = new Set<() => void>();
 
 	constructor(
 		private ctx: InteractiveModeContext,
@@ -36,6 +37,15 @@ export class SessionFocusController {
 		return this.#attachedSession;
 	}
 
+	onFocusChanged(cb: () => void): () => void {
+		this.#focusListeners.add(cb);
+		return () => this.#focusListeners.delete(cb);
+	}
+
+	#emitFocusChanged(): void {
+		for (const cb of this.#focusListeners) cb();
+	}
+
 	/** Focus the main view on an agent's live session. Throws an Error with a user-displayable message. */
 	async focusAgent(id: string): Promise<void> {
 		if (this.ctx.collabGuest) throw new Error("Viewing agents is unavailable in a collab session.");
@@ -44,6 +54,7 @@ export class SessionFocusController {
 		if (id === this.#focusedAgentId && session === this.#attachedSession) return;
 		this.#focusedAgentId = id;
 		this.#attachedSession = session;
+		this.#emitFocusChanged();
 		this.#registryUnsubscribe ??= this.registry.onChange(e => this.#onRegistryEvent(e));
 		await this.#attach(session);
 		this.ctx.showStatus(`Viewing agent ${id} — Esc returns to main, ←← hops to parent`);
@@ -64,6 +75,7 @@ export class SessionFocusController {
 		if (!this.#focusedAgentId) return;
 		this.#focusedAgentId = undefined;
 		this.#attachedSession = undefined;
+		this.#emitFocusChanged();
 		await this.#attach(this.ctx.session);
 		this.ctx.showStatus("Returned to main session");
 	}

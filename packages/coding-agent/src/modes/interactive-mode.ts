@@ -94,7 +94,7 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
 	type: "text",
 };
-import { type AgentRegistry, listMainSubagentOrdinals } from "../registry/agent-registry";
+import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import {
 	type AgentSession,
 	type AgentSessionEvent,
@@ -395,10 +395,6 @@ export function renderSubagentHudLines(
 	const dot = theme.styledSymbol("status.done", "accent");
 	const visible = running.slice(0, SUBAGENT_HUD_VISIBLE_LIMIT);
 	const hiddenCount = running.length - visible.length;
-	const subOrdinals = new Map<string, number>();
-	listMainSubagentOrdinals().forEach((ref, index) => {
-		subOrdinals.set(ref.id, index + 1);
-	});
 	const rowAgentIds: (string | undefined)[] = [];
 	const rows = renderTreeList(
 		{
@@ -441,9 +437,7 @@ export function renderSubagentHudLines(
 				for (const raw of [...progress.recentOutput].reverse().slice(-10)) {
 					extra.push(`  ${truncateToWidth(replaceTabs(raw), tailBudget)}`);
 				}
-				const ordinal = subOrdinals.get(session.id);
-				const chord = ordinal !== undefined && ordinal <= 9 ? `ctrl+k ${ordinal} to stream full output or ` : "";
-				extra.push(`${theme.tree.hook} ${chord}click here`);
+				extra.push(`${theme.tree.hook} click here to stream full output`);
 				for (let i = 0; i < 1 + extra.length; i++) rowAgentIds.push(session.id);
 				return [line, ...extra.map(entry => theme.fg("dim", entry))];
 			},
@@ -1014,7 +1008,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#eventBus) {
 			this.#observerRegistry.subscribeToEventBus(this.#eventBus);
 		}
-		this.#herdrSubagentReporter = maybeCreateHerdrSubagentReporter(this.#observerRegistry);
+		this.#herdrSubagentReporter = maybeCreateHerdrSubagentReporter(this.#observerRegistry, {
+			getFocusedAgentId: () => this.#focusController.focusedAgentId,
+			onFocusChanged: cb => this.#focusController.onFocusChanged(cb),
+			getSessionTitle: () => this.sessionManager.getSessionName(),
+			onSessionTitleChanged: cb => this.sessionManager.onSessionNameChanged(cb),
+		});
 		this.#observerRegistry.setMainSession(this.sessionManager.getSessionFile() ?? undefined);
 		this.syncRunningSubagentBadge();
 		this.#observerRegistry.onChange(kind => {

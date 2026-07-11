@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { type AutocompleteProvider, type KeyId, matchesKey, parseSgrMouse, type SlashCommand } from "@oh-my-pi/pi-tui";
+import { type AutocompleteProvider, matchesKey, parseSgrMouse, type SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, isEnoent, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { AsyncJobManager } from "../../async/job-manager";
 import { isSettingsInitialized, settings } from "../../config/settings";
@@ -20,7 +20,7 @@ import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/ski
 import type { InteractiveModeContext } from "../../modes/types";
 import manualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
-import { listMainSubagentOrdinals } from "../../registry/agent-registry";
+import { AgentRegistry } from "../../registry/agent-registry";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { isTinyTitleLocalModelKey } from "../../tiny/models";
@@ -179,9 +179,8 @@ export class InputController {
 	#focusedPasteListenerInstalled = false;
 	#btwBranchListenerInstalled = false;
 	#btwCopyListenerInstalled = false;
-	#subagentChordListenerInstalled = false;
+	#herdrCsiListenerInstalled = false;
 	#mouseClickListenerInstalled = false;
-	#subagentChordUntil = 0;
 	// Tap counter for the double-← gesture; reset whenever a quiet gap
 	// (>= LEFT_DOUBLE_TAP_MAX_GAP_MS) starts a fresh sequence. See
 	// #detectLeftDoubleTap.
@@ -510,33 +509,16 @@ export class InputController {
 		for (const key of hubKeys) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showAgentHub());
 		}
-		this.ctx.editor.setCustomKeyHandler("ctrl+k", () => {
-			this.#subagentChordUntil = Date.now() + 1500;
-		});
-		if (!this.#subagentChordListenerInstalled) {
-			this.#subagentChordListenerInstalled = true;
+		if (!this.#herdrCsiListenerInstalled) {
+			this.#herdrCsiListenerInstalled = true;
 			this.ctx.ui.addInputListener(data => {
-				let ordinal = 0;
-				let stop = false;
-				const csi = /^\x1b\[>8365;(\d)([FK])$/.exec(data);
-				if (csi) {
-					ordinal = Number(csi[1]);
-					stop = csi[2] === "K";
-				} else {
-					const armedUntil = this.#subagentChordUntil;
-					this.#subagentChordUntil = 0;
-					if (Date.now() >= armedUntil) return undefined;
-					for (let digit = 1; digit <= 9; digit++) {
-						if (matchesKey(data, `${digit}` as KeyId)) {
-							ordinal = digit;
-							break;
-						}
-					}
-					if (ordinal === 0) return undefined;
-				}
-				const target = listMainSubagentOrdinals()[ordinal - 1];
+				const csi = /^\x1b\[>8365;(\d+)([FK])$/.exec(data);
+				if (!csi) return undefined;
+				const seq = Number(csi[1]);
+				const stop = csi[2] === "K";
+				const target = AgentRegistry.global().getBySeq(seq);
 				if (!target) {
-					this.ctx.showStatus(`No subagent #${ordinal} to ${stop ? "stop" : "view"}`);
+					this.ctx.showStatus(`No subagent #${seq} to ${stop ? "stop" : "view"}`);
 					return { consume: true };
 				}
 				if (stop) {

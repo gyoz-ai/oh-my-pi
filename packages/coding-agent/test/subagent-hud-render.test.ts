@@ -16,7 +16,6 @@ import {
 	SessionObserverRegistry,
 } from "@oh-my-pi/pi-coding-agent/modes/session-observer-registry";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -334,11 +333,7 @@ describe("subagent HUD activity tails", () => {
 		expect(out).toContain("older output line");
 	});
 
-	it("rows add nested task lines, an output tail, and the ctrl+k hint without expansion", () => {
-		AgentRegistry.resetGlobalForTests();
-		const registry = AgentRegistry.global();
-		registry.register({ id: "Main", displayName: "Main", kind: "main", session: null });
-		registry.register({ id: "Worker", displayName: "Worker", kind: "sub", parentId: "Main", session: null });
+	it("rows add nested task lines, an output tail, and the stream hint without expansion", () => {
 		const progress = makeProgress({
 			id: "Worker",
 			currentTool: "bash",
@@ -358,7 +353,7 @@ describe("subagent HUD activity tails", () => {
 		expect(out).toContain("task Worker>Kid [running] child job");
 		expect(out).toContain("tail older");
 		expect(out).toContain("tail newest");
-		expect(out).toContain("ctrl+k 1 to stream full output or click here");
+		expect(out).toContain("click here to stream full output");
 		expect(result.agentIdsByRow).toEqual([
 			undefined,
 			undefined,
@@ -371,16 +366,14 @@ describe("subagent HUD activity tails", () => {
 		]);
 	});
 
-	it("rows without a registry ordinal render no stream hint", () => {
-		AgentRegistry.resetGlobalForTests();
+	it("rows always render the stream hint, with no registry involved", () => {
 		const sessions = [
 			makeSession({ id: "Ghost", description: "job", progress: makeProgress({ id: "Ghost", currentTool: "read" }) }),
 		];
 		const result = renderSubagentHudLines(sessions, 120);
 		const out = Bun.stripANSI(result.lines.join("\n"));
 		expect(out).toContain("read");
-		expect(out).not.toContain("ctrl+k");
-		expect(out).toContain("click here");
+		expect(out).toContain("click here to stream full output");
 		expect(result.agentIdsByRow.slice(2)).toEqual(["Ghost", "Ghost", "Ghost"]);
 	});
 });

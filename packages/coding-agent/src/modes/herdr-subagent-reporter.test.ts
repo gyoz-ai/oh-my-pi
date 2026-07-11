@@ -17,7 +17,9 @@ interface CapturedFrame {
 		pane_id: string;
 		source: string;
 		seq: number;
-		subagents: Array<{ id: string; agent: string; status: string; description?: string; index: number }>;
+		subagents: Array<{ id: string; agent: string; status: string; description?: string; agent_seq: number }>;
+		focused_agent_seq?: number;
+		session_title?: string;
 	};
 }
 
@@ -39,6 +41,16 @@ function emitLifecycle(
 		agentSource: "bundled",
 		...payload,
 	} satisfies SubagentLifecyclePayload);
+}
+
+function registerAgent(id: string): number {
+	return AgentRegistry.global().register({
+		id,
+		displayName: id,
+		kind: "sub",
+		parentId: MAIN_AGENT_ID,
+		session: null,
+	}).seq;
 }
 
 function waitFrames(count: number): Promise<void> {
@@ -121,23 +133,27 @@ describe("maybeCreateHerdrSubagentReporter", () => {
 		delete $env.HERDR_PANE_ID;
 		expect(maybeCreateHerdrSubagentReporter(registry)).toBeUndefined();
 		$env.HERDR_PANE_ID = "pane-42";
+		const gatedSeq = registerAgent("gated");
 		emitLifecycle({ id: "gated", status: "started", index: 0 });
 		reporter = maybeCreateHerdrSubagentReporter(registry);
 		expect(reporter).toBeDefined();
+		const fenceSeq = registerAgent("fence");
 		emitLifecycle({ id: "fence", status: "started", index: 1 });
 		await waitFrames(1);
 		expect(frames.length).toBe(1);
 		expect(frames[0].params.subagents).toEqual([
-			{ id: "gated", agent: "task", status: "working", index: 0 },
-			{ id: "fence", agent: "task", status: "working", index: 1 },
+			{ id: "gated", agent: "task", status: "working", agent_seq: gatedSeq },
+			{ id: "fence", agent: "task", status: "working", agent_seq: fenceSeq },
 		]);
 	});
 
 	it("reports the full subagent list with mapped statuses and strictly increasing seq", async () => {
 		reporter = maybeCreateHerdrSubagentReporter(registry);
 		expect(reporter).toBeDefined();
+		const aSeq = registerAgent("a");
 		emitLifecycle({ id: "a", status: "started", index: 0, agent: "explore", description: "scan the repo" });
 		await waitFrames(1);
+		const bSeq = registerAgent("b");
 		emitLifecycle({ id: "b", status: "started", index: 1 });
 		await waitFrames(2);
 		emitLifecycle({ id: "a", status: "completed", index: 0, agent: "explore" });
@@ -149,19 +165,19 @@ describe("maybeCreateHerdrSubagentReporter", () => {
 		expect(frames[0].params.pane_id).toBe("pane-42");
 		expect(frames[0].params.source).toBe("custom:omp-subagents");
 		expect(frames[0].params.subagents).toEqual([
-			{ id: "a", agent: "explore", status: "working", description: "scan the repo", index: 0 },
+			{ id: "a", agent: "explore", status: "working", description: "scan the repo", agent_seq: aSeq },
 		]);
 		expect(frames[1].params.subagents).toEqual([
-			{ id: "a", agent: "explore", status: "working", description: "scan the repo", index: 0 },
-			{ id: "b", agent: "task", status: "working", index: 1 },
+			{ id: "a", agent: "explore", status: "working", description: "scan the repo", agent_seq: aSeq },
+			{ id: "b", agent: "task", status: "working", agent_seq: bSeq },
 		]);
 		expect(frames[2].params.subagents).toEqual([
-			{ id: "a", agent: "explore", status: "done", description: "scan the repo", index: 0 },
-			{ id: "b", agent: "task", status: "working", index: 1 },
+			{ id: "a", agent: "explore", status: "done", description: "scan the repo", agent_seq: aSeq },
+			{ id: "b", agent: "task", status: "working", agent_seq: bSeq },
 		]);
 		expect(frames[3].params.subagents).toEqual([
-			{ id: "a", agent: "explore", status: "done", description: "scan the repo", index: 0 },
-			{ id: "b", agent: "task", status: "failed", index: 1 },
+			{ id: "a", agent: "explore", status: "done", description: "scan the repo", agent_seq: aSeq },
+			{ id: "b", agent: "task", status: "failed", agent_seq: bSeq },
 		]);
 		for (let i = 1; i < frames.length; i++) {
 			expect(frames[i].params.seq).toBeGreaterThan(frames[i - 1].params.seq);
@@ -170,56 +186,83 @@ describe("maybeCreateHerdrSubagentReporter", () => {
 
 	it("coalesces a burst of events into one trailing report", async () => {
 		reporter = maybeCreateHerdrSubagentReporter(registry);
+		const aSeq = registerAgent("a");
+		const bSeq = registerAgent("b");
+		const cSeq = registerAgent("c");
 		emitLifecycle({ id: "a", status: "started", index: 0 });
 		emitLifecycle({ id: "b", status: "started", index: 1 });
 		emitLifecycle({ id: "c", status: "started", index: 2 });
 		emitLifecycle({ id: "a", status: "completed", index: 0 });
 		await waitFrames(1);
+		registerAgent("d");
 		emitLifecycle({ id: "d", status: "started", index: 3 });
 		await waitFrames(2);
 		expect(frames.length).toBe(2);
 		expect(frames[0].params.subagents).toEqual([
-			{ id: "a", agent: "task", status: "done", index: 0 },
-			{ id: "b", agent: "task", status: "working", index: 1 },
-			{ id: "c", agent: "task", status: "working", index: 2 },
+			{ id: "a", agent: "task", status: "done", agent_seq: aSeq },
+			{ id: "b", agent: "task", status: "working", agent_seq: bSeq },
+			{ id: "c", agent: "task", status: "working", agent_seq: cSeq },
 		]);
 	});
 
 	it("retains finished rows until a new wave starts, then clears them", async () => {
 		reporter = maybeCreateHerdrSubagentReporter(registry);
+		const aSeq = registerAgent("a");
 		emitLifecycle({ id: "a", status: "started", index: 0 });
 		await waitFrames(1);
 		emitLifecycle({ id: "a", status: "failed", index: 0 });
 		await waitFrames(2);
-		expect(frames[1].params.subagents).toEqual([{ id: "a", agent: "task", status: "failed", index: 0 }]);
+		expect(frames[1].params.subagents).toEqual([{ id: "a", agent: "task", status: "failed", agent_seq: aSeq }]);
+		const bSeq = registerAgent("b");
 		emitLifecycle({ id: "b", status: "started", index: 0 });
 		await waitFrames(3);
-		expect(frames[2].params.subagents).toEqual([{ id: "b", agent: "task", status: "working", index: 0 }]);
+		expect(frames[2].params.subagents).toEqual([{ id: "b", agent: "task", status: "working", agent_seq: bSeq }]);
 	});
 
-	it("emits indexes from AgentRegistry registration order, not task-batch position", async () => {
+	it("reports agent_seq from AgentRegistry, independent of task-batch position", async () => {
 		const agents = AgentRegistry.global();
 		agents.register({ id: MAIN_AGENT_ID, displayName: "Main", kind: "main", session: null });
-		agents.register({ id: "zed", displayName: "zed", kind: "sub", parentId: MAIN_AGENT_ID, session: null });
+		const zedSeq = agents.register({
+			id: "zed",
+			displayName: "zed",
+			kind: "sub",
+			parentId: MAIN_AGENT_ID,
+			session: null,
+		}).seq;
 		agents.setStatus("zed", "aborted");
-		agents.register({ id: "beta", displayName: "beta", kind: "sub", parentId: MAIN_AGENT_ID, session: null });
-		agents.register({ id: "alpha", displayName: "alpha", kind: "sub", parentId: MAIN_AGENT_ID, session: null });
+		const betaSeq = agents.register({
+			id: "beta",
+			displayName: "beta",
+			kind: "sub",
+			parentId: MAIN_AGENT_ID,
+			session: null,
+		}).seq;
+		const alphaSeq = agents.register({
+			id: "alpha",
+			displayName: "alpha",
+			kind: "sub",
+			parentId: MAIN_AGENT_ID,
+			session: null,
+		}).seq;
 		reporter = maybeCreateHerdrSubagentReporter(registry);
 		emitLifecycle({ id: "alpha", status: "started", index: 0 });
 		emitLifecycle({ id: "beta", status: "started", index: 1 });
 		emitLifecycle({ id: "gamma", status: "started", index: 2 });
 		await waitFrames(1);
 		expect(frames[0].params.subagents).toEqual([
-			{ id: "alpha", agent: "task", status: "working", index: 2 },
-			{ id: "beta", agent: "task", status: "working", index: 1 },
-			{ id: "gamma", agent: "task", status: "working", index: 2 },
+			{ id: "alpha", agent: "task", status: "working", agent_seq: alphaSeq },
+			{ id: "beta", agent: "task", status: "working", agent_seq: betaSeq },
+			{ id: "gamma", agent: "task", status: "working", agent_seq: 0 },
 		]);
+		expect(zedSeq).toBeLessThan(betaSeq);
+		expect(betaSeq).toBeLessThan(alphaSeq);
 	});
 
 	it("resolves dispose only after the final empty-list frame is on the wire", async () => {
 		const created = maybeCreateHerdrSubagentReporter(registry);
 		if (!created) throw new Error("reporter not created");
 		reporter = created;
+		registerAgent("a");
 		emitLifecycle({ id: "a", status: "started", index: 0 });
 		await waitFrames(1);
 		let resolved = false;
@@ -236,17 +279,21 @@ describe("maybeCreateHerdrSubagentReporter", () => {
 		const created = maybeCreateHerdrSubagentReporter(registry);
 		if (!created) throw new Error("reporter not created");
 		reporter = created;
+		const aSeq = registerAgent("a");
 		emitLifecycle({ id: "a", status: "started", index: 0 });
 		await waitFrames(1);
 		registry.resetSessions();
 		await waitFrames(2);
 		expect(frames[1].params.subagents).toEqual([]);
+		const bSeq = registerAgent("b");
 		emitLifecycle({ id: "b", status: "started", index: 0 });
 		await waitFrames(3);
-		expect(frames[2].params.subagents).toEqual([{ id: "b", agent: "task", status: "working", index: 0 }]);
+		expect(frames[2].params.subagents).toEqual([{ id: "b", agent: "task", status: "working", agent_seq: bSeq }]);
 		await created.dispose();
 		expect(frames.length).toBe(4);
 		expect(frames[3].params.subagents).toEqual([]);
+		expect(aSeq).toBeLessThan(bSeq);
+		registerAgent("c");
 		emitLifecycle({ id: "c", status: "started", index: 0 });
 		const { promise: settled, resolve: settledResolve } = Promise.withResolvers<void>();
 		setTimeout(settledResolve, 250);
@@ -259,6 +306,7 @@ describe("maybeCreateHerdrSubagentReporter", () => {
 		const created = maybeCreateHerdrSubagentReporter(registry);
 		if (!created) throw new Error("reporter not created");
 		reporter = created;
+		registerAgent("a");
 		emitLifecycle({ id: "a", status: "started", index: 0 });
 		const { promise: settled, resolve: settledResolve } = Promise.withResolvers<void>();
 		setTimeout(settledResolve, 150);
@@ -266,5 +314,41 @@ describe("maybeCreateHerdrSubagentReporter", () => {
 		emitLifecycle({ id: "a", status: "completed", index: 0 });
 		await created.dispose();
 		expect(frames.length).toBe(0);
+	});
+
+	it("includes focused_agent_seq and session_title, flushing on focus/title changes alone", async () => {
+		let focusedId: string | undefined;
+		const focusListeners = new Set<() => void>();
+		let sessionTitle: string | undefined;
+		const titleListeners = new Set<() => void>();
+		reporter = maybeCreateHerdrSubagentReporter(registry, {
+			getFocusedAgentId: () => focusedId,
+			onFocusChanged: cb => {
+				focusListeners.add(cb);
+				return () => focusListeners.delete(cb);
+			},
+			getSessionTitle: () => sessionTitle,
+			onSessionTitleChanged: cb => {
+				titleListeners.add(cb);
+				return () => titleListeners.delete(cb);
+			},
+		});
+		const aSeq = registerAgent("a");
+		emitLifecycle({ id: "a", status: "started", index: 0 });
+		await waitFrames(1);
+		expect(frames[0].params.focused_agent_seq).toBeUndefined();
+		expect(frames[0].params.session_title).toBeUndefined();
+
+		focusedId = "a";
+		for (const cb of focusListeners) cb();
+		await waitFrames(2);
+		expect(frames[1].params.focused_agent_seq).toBe(aSeq);
+		expect(frames[1].params.subagents).toEqual([{ id: "a", agent: "task", status: "working", agent_seq: aSeq }]);
+
+		sessionTitle = "Fixing the parser";
+		for (const cb of titleListeners) cb();
+		await waitFrames(3);
+		expect(frames[2].params.session_title).toBe("Fixing the parser");
+		expect(frames[2].params.focused_agent_seq).toBe(aSeq);
 	});
 });

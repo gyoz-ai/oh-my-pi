@@ -22,6 +22,7 @@ function makeTempDir(prefix: string): string {
 function createRef(sessionFile: string): AgentRef {
 	return {
 		id: "persisted-restricted",
+		seq: 1,
 		displayName: "Persisted Restricted",
 		kind: "sub",
 		parentId: "Main",
