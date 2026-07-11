@@ -94,7 +94,7 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with {
 	type: "text",
 };
-import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { type AgentRegistry, listMainSubagentOrdinals } from "../registry/agent-registry";
 import {
 	type AgentSession,
 	type AgentSessionEvent,
@@ -383,23 +383,23 @@ const SUBAGENT_OBSERVER_UI_COALESCE_MS = 100;
  * eval `agent()` spawns are rendered by their own eval cell tree.
  * Returns an empty array when nothing is running so the container can clear.
  */
-export function renderSubagentHudLines(sessions: ObservableSession[], columns: number): string[] {
+export function renderSubagentHudLines(
+	sessions: ObservableSession[],
+	columns: number,
+): { lines: string[]; agentIdsByRow: (string | undefined)[] } {
 	const running = sessions.filter(
 		session => session.kind === "subagent" && session.status === "active" && session.detached === true,
 	);
-	if (running.length === 0) return [];
+	if (running.length === 0) return { lines: [], agentIdsByRow: [] };
 
 	const dot = theme.styledSymbol("status.done", "accent");
 	const visible = running.slice(0, SUBAGENT_HUD_VISIBLE_LIMIT);
 	const hiddenCount = running.length - visible.length;
 	const subOrdinals = new Map<string, number>();
-	let nextOrdinal = 0;
-	for (const ref of AgentRegistry.global().list()) {
-		if (ref.kind === "sub" && ref.parentId === MAIN_AGENT_ID && ref.status !== "aborted") {
-			nextOrdinal += 1;
-			subOrdinals.set(ref.id, nextOrdinal);
-		}
-	}
+	listMainSubagentOrdinals().forEach((ref, index) => {
+		subOrdinals.set(ref.id, index + 1);
+	});
+	const rowAgentIds: (string | undefined)[] = [];
 	const rows = renderTreeList(
 		{
 			items: visible,
@@ -420,7 +420,10 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 					}
 				}
 				const progress = session.progress;
-				if (progress?.status !== "running") return line;
+				if (progress?.status !== "running") {
+					rowAgentIds.push(session.id);
+					return line;
+				}
 				const detail = progress.lastIntent?.trim() || progress.currentToolArgs?.trim();
 				const activity = progress.currentTool
 					? detail
@@ -439,10 +442,9 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 					extra.push(`  ${truncateToWidth(replaceTabs(raw), tailBudget)}`);
 				}
 				const ordinal = subOrdinals.get(session.id);
-				if (ordinal !== undefined && ordinal <= 9) {
-					extra.push(`${theme.tree.hook} ctrl+k ${ordinal} to stream full output`);
-				}
-				if (extra.length === 0) return line;
+				const chord = ordinal !== undefined && ordinal <= 9 ? `ctrl+k ${ordinal} to stream full output or ` : "";
+				extra.push(`${theme.tree.hook} ${chord}click here`);
+				for (let i = 0; i < 1 + extra.length; i++) rowAgentIds.push(session.id);
 				return [line, ...extra.map(entry => theme.fg("dim", entry))];
 			},
 		},
@@ -450,8 +452,12 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 	);
 	if (hiddenCount > 0) {
 		rows.push(theme.fg("dim", `… ${hiddenCount} more running — open Agent Hub for full list`));
+		rowAgentIds.push(undefined);
 	}
-	return ["", theme.bold(theme.fg("accent", "Subagents")), ...rows.map(line => ` ${line}`)];
+	return {
+		lines: ["", theme.bold(theme.fg("accent", "Subagents")), ...rows.map(line => ` ${line}`)],
+		agentIdsByRow: [undefined, undefined, ...rowAgentIds],
+	};
 }
 
 export class InteractiveMode implements InteractiveModeContext {
@@ -670,6 +676,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#voicePreviousUseTerminalCursor: boolean | null = null;
 	#resizeHandler?: () => void;
 	#observerRegistry: SessionObserverRegistry;
+	#subagentHudAgentIdsByRow: (string | undefined)[] = [];
 	#herdrSubagentReporter?: { dispose(): Promise<void> };
 	#eventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
@@ -2074,9 +2081,17 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	renderSubagentList(): void {
 		this.subagentContainer.clear();
-		const lines = renderSubagentHudLines(this.#observerRegistry.getSessions(), this.ui.terminal.columns);
+		const { lines, agentIdsByRow } = renderSubagentHudLines(
+			this.#observerRegistry.getSessions(),
+			this.ui.terminal.columns,
+		);
+		this.#subagentHudAgentIdsByRow = agentIdsByRow;
 		if (lines.length === 0) return;
 		this.subagentContainer.addChild(new Text(lines.join("\n"), 1, 0));
+	}
+
+	subagentHudAgentIdAtRow(localRow: number): string | undefined {
+		return this.#subagentHudAgentIdsByRow[localRow];
 	}
 
 	async #loadTodoList(): Promise<void> {

@@ -90,7 +90,7 @@ function makeProgressPayload(
 }
 
 function render(sessions: ObservableSession[], columns = 120): string {
-	return Bun.stripANSI(renderSubagentHudLines(sessions, columns).join("\n"));
+	return Bun.stripANSI(renderSubagentHudLines(sessions, columns).lines.join("\n"));
 }
 
 describe("subagent HUD lines", () => {
@@ -114,7 +114,7 @@ describe("subagent HUD lines", () => {
 			{ id: "main", kind: "main", label: "Main Session", status: "active", lastUpdate: Date.now() },
 			...finishedStates.map(status => makeSession({ id: `Done-${status}`, status, description: "old work" })),
 		];
-		expect(renderSubagentHudLines(sessions, 120)).toEqual([]);
+		expect(renderSubagentHudLines(sessions, 120)).toEqual({ lines: [], agentIdsByRow: [] });
 
 		const out = render([...sessions, makeSession({ id: "StillRunning", description: "live work" })]);
 		expect(out).toContain("StillRunning: live work");
@@ -141,7 +141,7 @@ describe("subagent HUD lines", () => {
 			makeSession({ id: "SyncSpawn", description: "inline task work", detached: false }),
 			makeSession({ id: "EvalSpawn", description: "eval cell work", detached: undefined }),
 		];
-		expect(renderSubagentHudLines(sessions, 120)).toEqual([]);
+		expect(renderSubagentHudLines(sessions, 120)).toEqual({ lines: [], agentIdsByRow: [] });
 
 		const out = render([...sessions, makeSession({ id: "BackgroundSpawn", description: "detached work" })]);
 		expect(out).toContain("BackgroundSpawn: detached work");
@@ -352,12 +352,23 @@ describe("subagent HUD activity tails", () => {
 			},
 		});
 		const sessions = [makeSession({ id: "Worker", description: "job", progress })];
-		const out = Bun.stripANSI(renderSubagentHudLines(sessions, 120).join("\n"));
+		const result = renderSubagentHudLines(sessions, 120);
+		const out = Bun.stripANSI(result.lines.join("\n"));
 		expect(out).toContain("bash: Running tests");
 		expect(out).toContain("task Worker>Kid [running] child job");
 		expect(out).toContain("tail older");
 		expect(out).toContain("tail newest");
-		expect(out).toContain("ctrl+k 1 to stream full output");
+		expect(out).toContain("ctrl+k 1 to stream full output or click here");
+		expect(result.agentIdsByRow).toEqual([
+			undefined,
+			undefined,
+			"Worker",
+			"Worker",
+			"Worker",
+			"Worker",
+			"Worker",
+			"Worker",
+		]);
 	});
 
 	it("rows without a registry ordinal render no stream hint", () => {
@@ -365,8 +376,11 @@ describe("subagent HUD activity tails", () => {
 		const sessions = [
 			makeSession({ id: "Ghost", description: "job", progress: makeProgress({ id: "Ghost", currentTool: "read" }) }),
 		];
-		const out = Bun.stripANSI(renderSubagentHudLines(sessions, 120).join("\n"));
+		const result = renderSubagentHudLines(sessions, 120);
+		const out = Bun.stripANSI(result.lines.join("\n"));
 		expect(out).toContain("read");
 		expect(out).not.toContain("ctrl+k");
+		expect(out).toContain("click here");
+		expect(result.agentIdsByRow.slice(2)).toEqual(["Ghost", "Ghost", "Ghost"]);
 	});
 });

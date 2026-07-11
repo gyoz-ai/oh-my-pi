@@ -16,7 +16,7 @@ import {
 import { createIrcMessageCard } from "../../tools/hub";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
 import { canonicalizeMessage } from "../../utils/thinking-display";
-import { TranscriptBlock } from "../components/transcript-container";
+import { type AgentRowTarget, TranscriptBlock } from "../components/transcript-container";
 import { theme } from "../theme/theme";
 
 type CustomOrHookMessage = Extract<AgentMessage, { role: "custom" | "hookMessage" }>;
@@ -27,7 +27,20 @@ type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
  * or a batch of them) as a transcript block of one "Background job completed"
  * row per job.
  */
-export function buildAsyncResultBlock(message: CustomOrHookMessage): TranscriptBlock {
+class AsyncResultBlock extends TranscriptBlock implements AgentRowTarget {
+	readonly #agentIdsByRow: (string | undefined)[];
+
+	constructor(agentIdsByRow: (string | undefined)[]) {
+		super();
+		this.#agentIdsByRow = agentIdsByRow;
+	}
+
+	agentIdAtLocalRow(localRow: number): string | undefined {
+		return this.#agentIdsByRow[localRow];
+	}
+}
+
+export function buildAsyncResultBlock(message: CustomOrHookMessage): TranscriptBlock & AgentRowTarget {
 	const details = (
 		message as CustomMessage<{
 			jobId?: string;
@@ -48,7 +61,8 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): TranscriptB
 						durationMs: details?.durationMs,
 					},
 				];
-	const block = new TranscriptBlock();
+	const agentIdsByRow: (string | undefined)[] = [];
+	const block = new AsyncResultBlock(agentIdsByRow);
 	for (const job of jobs) {
 		const jobId = job.jobId ?? "unknown";
 		const typeLabel = job.type ? `[${job.type}]` : "[job]";
@@ -62,6 +76,7 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): TranscriptB
 			.filter(Boolean)
 			.join(" ");
 		block.addChild(new Text(line, 1, 0));
+		agentIdsByRow.push(job.type === "task" && job.jobId ? job.jobId : undefined);
 	}
 	return block;
 }

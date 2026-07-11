@@ -128,6 +128,7 @@ export interface InteractiveModeContext {
 	/** Clear loader, transient HUD/pending containers, streaming state, and pending tools. */
 	clearTransientSessionUi(): void;
 	renderSubagentList(): void;
+	subagentHudAgentIdAtRow(localRow: number): string | undefined;
 	settings: Settings;
 	keybindings: KeybindingsManager;
 	agent: AgentSession["agent"];

@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { type AutocompleteProvider, type KeyId, matchesKey, type SlashCommand } from "@oh-my-pi/pi-tui";
+import { type AutocompleteProvider, type KeyId, matchesKey, parseSgrMouse, type SlashCommand } from "@oh-my-pi/pi-tui";
 import { $env, isEnoent, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { AsyncJobManager } from "../../async/job-manager";
 import { isSettingsInitialized, settings } from "../../config/settings";
@@ -11,6 +11,7 @@ import { AssistantMessageComponent } from "../../modes/components/assistant-mess
 import { extractImagePathFromText } from "../../modes/components/custom-editor";
 import { renderSegmentTrack } from "../../modes/components/segment-track";
 import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-title-download-progress";
+import type { AgentRowTarget } from "../../modes/components/transcript-container";
 import { expandEmoticons } from "../../modes/emoji-autocomplete";
 import { materializeImageReferenceLinks, shiftImageMarkers } from "../../modes/image-references";
 import { createPromptActionAutocompleteProvider } from "../../modes/prompt-action-autocomplete";
@@ -19,7 +20,7 @@ import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/ski
 import type { InteractiveModeContext } from "../../modes/types";
 import manualContinuePrompt from "../../prompts/system/manual-continue.md" with { type: "text" };
 import { AgentLifecycleManager } from "../../registry/agent-lifecycle";
-import { AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
+import { listMainSubagentOrdinals } from "../../registry/agent-registry";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { isTinyTitleLocalModelKey } from "../../tiny/models";
@@ -179,6 +180,7 @@ export class InputController {
 	#btwBranchListenerInstalled = false;
 	#btwCopyListenerInstalled = false;
 	#subagentChordListenerInstalled = false;
+	#mouseClickListenerInstalled = false;
 	#subagentChordUntil = 0;
 	// Tap counter for the double-← gesture; reset whenever a quiet gap
 	// (>= LEFT_DOUBLE_TAP_MAX_GAP_MS) starts a fresh sequence. See
@@ -532,10 +534,7 @@ export class InputController {
 					}
 					if (ordinal === 0) return undefined;
 				}
-				const children = AgentRegistry.global()
-					.list()
-					.filter(ref => ref.kind === "sub" && ref.parentId === MAIN_AGENT_ID && ref.status !== "aborted");
-				const target = children[ordinal - 1];
+				const target = listMainSubagentOrdinals()[ordinal - 1];
 				if (!target) {
 					this.ctx.showStatus(`No subagent #${ordinal} to ${stop ? "stop" : "view"}`);
 					return { consume: true };
@@ -553,15 +552,19 @@ export class InputController {
 						this.ctx.showStatus(error instanceof Error ? error.message : String(error));
 					});
 				} else {
-					void (async () => {
-						if (this.ctx.focusedAgentId && this.ctx.focusedAgentId !== target.id) {
-							await this.ctx.unfocusSession();
-						}
-						await this.ctx.focusAgentSession(target.id);
-					})().catch(error => {
-						this.ctx.showStatus(error instanceof Error ? error.message : String(error));
-					});
+					this.#focusAgentById(target.id);
 				}
+				return { consume: true };
+			});
+		}
+		if (!this.#mouseClickListenerInstalled) {
+			this.#mouseClickListenerInstalled = true;
+			this.ctx.ui.addInputListener(data => {
+				if (!data.startsWith("\x1b[<")) return undefined;
+				const event = parseSgrMouse(data);
+				if (!event) return undefined;
+				if (this.ctx.ui.hasOverlay()) return undefined;
+				if (event.leftClick) this.#handleMainScreenClick(event.row);
 				return { consume: true };
 			});
 		}
@@ -600,6 +603,33 @@ export class InputController {
 	#handleFocusedLeftTap(): void {
 		if (this.#detectLeftDoubleTap()) {
 			void this.ctx.unfocusSession();
+		}
+	}
+
+	#focusAgentById(id: string): void {
+		void (async () => {
+			if (this.ctx.focusedAgentId && this.ctx.focusedAgentId !== id) {
+				await this.ctx.unfocusSession();
+			}
+			await this.ctx.focusAgentSession(id);
+		})().catch(error => {
+			this.ctx.showStatus(error instanceof Error ? error.message : String(error));
+		});
+	}
+
+	#handleMainScreenClick(screenRow: number): void {
+		const hit = this.ctx.ui.hitTestScreenRow(screenRow);
+		if (!hit) return;
+		if (hit.component === this.ctx.chatContainer) {
+			const block = this.ctx.chatContainer.hitTestBlock(hit.localRow);
+			const target = block?.component as Partial<AgentRowTarget> | undefined;
+			const agentId = target?.agentIdAtLocalRow?.(block?.localRow ?? -1);
+			if (agentId) this.#focusAgentById(agentId);
+			return;
+		}
+		if (hit.component === this.ctx.subagentContainer) {
+			const agentId = this.ctx.subagentHudAgentIdAtRow(hit.localRow);
+			if (agentId) this.#focusAgentById(agentId);
 		}
 	}
 

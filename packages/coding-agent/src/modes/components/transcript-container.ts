@@ -126,6 +126,9 @@ interface BlockSegment {
 	/** Block version observed when this segment was rendered (see {@link FinalizableBlock}). */
 	version: number | undefined;
 }
+export interface AgentRowTarget {
+	agentIdAtLocalRow(localRow: number): string | undefined;
+}
 
 const EMPTY_SEGMENTS: BlockSegment[] = [];
 /** Shared empty result for an empty viewport-tail render (no allocation). */
@@ -250,6 +253,15 @@ export class TranscriptContainer
 			return segment.rowCount === 0 || segment.startRow >= this.#committedRows;
 		}
 		return true;
+	}
+	hitTestBlock(localRow: number): { component: Component; localRow: number } | undefined {
+		for (const segment of this.#segments) {
+			if (localRow < segment.startRow || localRow >= segment.startRow + segment.rowCount) continue;
+			const contentRow = localRow - segment.startRow - segment.sep;
+			if (contentRow < 0) return undefined;
+			return { component: segment.component, localRow: contentRow };
+		}
+		return undefined;
 	}
 
 	/**
