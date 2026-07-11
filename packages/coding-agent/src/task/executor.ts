@@ -43,7 +43,7 @@ import type { AgentSession, AgentSessionEvent, Prewalk } from "../session/agent-
 import type { ArtifactManager } from "../session/artifacts";
 import { ASYNC_RESULT_MESSAGE_TYPE } from "../session/async-job-delivery";
 import type { AuthStorage } from "../session/auth-storage";
-import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
+import { SILENT_ABORT_MARKER, SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../session/messages";
 import { SessionManager } from "../session/session-manager";
 import { truncateTail } from "../session/streaming-output";
 import type { ConfiguredThinkingLevel } from "../thinking";
@@ -1019,11 +1019,13 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	const abortActiveSession = (): Promise<void> => {
 		const session = activeSession;
 		if (!session) return Promise.resolve();
-		activeSessionAbortPromise ??= session.abort().catch(error => {
-			logger.debug("Subagent session abort cleanup failed", {
-				error: error instanceof Error ? error.message : String(error),
+		activeSessionAbortPromise ??= session
+			.abort(abortReason === "terminate" ? { reason: SILENT_ABORT_MARKER } : undefined)
+			.catch(error => {
+				logger.debug("Subagent session abort cleanup failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
 			});
-		});
 		return activeSessionAbortPromise;
 	};
 
