@@ -116,7 +116,7 @@ export function maybeCreateHerdrSubagentReporter(
 				id: session.id,
 				agent: session.agent ?? "task",
 				status,
-				description: session.description,
+				description: AgentRegistry.global().get(session.id)?.activity ?? session.description,
 				agent_seq: AgentRegistry.global().get(session.id)?.seq ?? 0,
 			});
 		}
