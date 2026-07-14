@@ -1,0 +1,107 @@
+#!/bin/sh
+# Runs omp inside the pi-container Docker image against whatever repo $PWD
+# points at. See container.md for the full picture; this file only implements
+# the mount/env/build logic.
+#
+# Self-locates the fork checkout by walking any symlink chain back to the
+# real script path, so it works whether it's reached via a PATH export of
+# scripts/ or a symlink into ~/.local/bin.
+set -e
+
+self=$0
+while [ -L "$self" ]; do
+	link=$(readlink "$self")
+	case $link in
+	/*) self=$link ;;
+	*) self=$(dirname "$self")/$link ;;
+	esac
+done
+repo_root=$(CDPATH= cd -- "$(dirname -- "$self")/.." && pwd -P)
+
+image=oh-my-pi/pi:container
+
+use_docker_socket=0
+if [ "${1:-}" = "--docker-socket" ]; then
+	use_docker_socket=1
+	shift
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+	echo "omp-container: docker is required but not found on PATH" >&2
+	exit 1
+fi
+if ! docker info >/dev/null 2>&1; then
+	echo "omp-container: docker daemon is unreachable — is Docker running?" >&2
+	exit 1
+fi
+
+if [ "${OMP_CONTAINER_REBUILD:-}" = "1" ] || ! docker image inspect "$image" >/dev/null 2>&1; then
+	docker build --target pi-container -t "$image" "$repo_root"
+fi
+
+repo_dir=$PWD
+mkdir -p "$HOME/.omp"
+
+# Assemble docker run's argv by repeatedly prepending flag groups, so the
+# caller's own args ("$@") stay pinned at the tail, right after the image
+# name, throughout every conditional insertion below.
+set -- "$image" "$@"
+
+if [ "$use_docker_socket" = 1 ]; then
+	set -- -v /var/run/docker.sock:/var/run/docker.sock "$@"
+fi
+
+if [ -f "$HOME/.gitconfig" ]; then
+	set -- -v "$HOME/.gitconfig:/root/.gitconfig:ro" "$@"
+fi
+
+excludesfile=$(git config --get --type=path core.excludesfile 2>/dev/null || true)
+if [ -n "$excludesfile" ]; then
+	if [ -f "$excludesfile" ]; then
+		set -- -v "$excludesfile:$excludesfile:ro" "$@"
+	fi
+else
+	excludesfile=${XDG_CONFIG_HOME:-$HOME/.config}/git/ignore
+	if [ -f "$excludesfile" ]; then
+		set -- -v "$excludesfile:/root/.config/git/ignore:ro" "$@"
+	fi
+fi
+
+if [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_SOCKET_PATH:-}" ] && [ -S "$HERDR_SOCKET_PATH" ]; then
+	if command -v socat >/dev/null 2>&1; then
+		if command -v python3 >/dev/null 2>&1; then
+			herdr_bridge_port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+			socat TCP-LISTEN:"$herdr_bridge_port",reuseaddr,fork UNIX-CONNECT:"$HERDR_SOCKET_PATH" >/dev/null 2>&1 &
+			herdr_bridge_pid=$!
+			trap 'kill "$herdr_bridge_pid" 2>/dev/null' EXIT INT TERM
+			set -- \
+				-e HERDR_ENV \
+				-e HERDR_SOCKET_PATH \
+				-e HERDR_PANE_ID \
+				-e HERDR_WORKSPACE_ID \
+				-e HERDR_TAB_ID \
+				-e "HERDR_BRIDGE_PORT=$herdr_bridge_port" \
+				"$@"
+		else
+			echo "omp-container: herdr status bridge disabled (python3 not found; needed to pick a free port)" >&2
+		fi
+	else
+		echo "omp-container: herdr status bridge disabled (socat not found; brew install socat)" >&2
+	fi
+fi
+
+set -- \
+	-v "$repo_dir:$repo_dir" \
+	-w "$repo_dir" \
+	-v "$repo_root:/work/pi:ro" \
+	-v "$HOME/.omp:/root/.omp" \
+	-v omp-mise-cache:/root/.local/share/mise \
+	--add-host=host.docker.internal:host-gateway \
+	"$@"
+
+if [ -t 0 ] && [ -t 1 ]; then
+	set -- -it "$@"
+else
+	set -- -i "$@"
+fi
+exec docker run --rm "$@"

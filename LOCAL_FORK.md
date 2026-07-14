@@ -31,6 +31,28 @@ fork's `src/` runs live — there is no bundle or build step in the loop.
 - `dist/cli.js` (`bun run gen:bundle`, via `scripts/bundle-dist.ts`) matters only
   for the dormant npm-installed copy; the dev launcher never reads it.
 
+## Running omp in a container
+
+`scripts/omp-container` runs `omp` inside the fork's `pi-container` Docker
+image (built `FROM pi-base`, `Dockerfile` target `pi-container`) against
+whatever repo `$PWD` points at, auto-provisioning that repo's own toolchain
+via mise from its own `mise.toml`/`.tool-versions`. See `container.md` for
+setup, usage, and troubleshooting.
+
+- Self-locates the fork checkout the same way `scripts/link-omp.sh` does, so
+  it works from a `PATH` export of `scripts/` alone.
+- Auto-builds `oh-my-pi/pi:container` on first run; `OMP_CONTAINER_REBUILD=1`
+  forces a rebuild.
+- herdr's PTY spawn/attach works unmodified. herdr's live sidebar
+  agent-status extension now works too: when `HERDR_ENV=1`,
+  `HERDR_SOCKET_PATH` is set, and the host has `socat`, the wrapper backgrounds
+  a host `socat TCP-LISTEN → UNIX-CONNECT` relay and the `pi-container`
+  entrypoint backgrounds a matching `socat UNIX-LISTEN → TCP:host.docker.internal`
+  relay, bridging the unix-socket connection across the VM boundary that
+  defeats a plain bind-mount (confirmed by spike). Without `socat` on the
+  host, the bridge is skipped with one stderr notice and sidebar status
+  stays inert, same as before.
+
 ## Gate
 
 From `packages/coding-agent`:

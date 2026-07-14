@@ -8,10 +8,12 @@
 #   pi-base         — python + bun + rustup launcher + natives + omp_rpc
 #                     + /usr/local/bin/omp shim
 #   pi-runtime      — pi-base + pi source + bun install      (DEFAULT, runnable)
+#   pi-container    — pi-base + mise + socat; host runner for scripts/omp-container
 #
 # Build:
 #     docker build -t oh-my-pi/pi:dev .                          # default = pi-runtime
 #     docker build --target pi-base -t oh-my-pi/pi-base:dev .    # base for derived images
+#     docker build --target pi-container -t oh-my-pi/pi:container .   # see scripts/omp-container
 #
 # Run:
 #     docker run --rm oh-my-pi/pi:dev --help
@@ -190,3 +192,41 @@ RUN bun --cwd=packages/coding-agent run gen:tool-views
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/omp"]
 CMD ["--help"]
+
+############################
+# 5) pi-container — pi-base + mise + socat, host runner for scripts/omp-container
+#
+# Host counterpart: scripts/omp-container. Bind-mounts a host repo at its own
+# absolute path and lets the entrypoint provision *that* repo's own toolchain
+# via mise (its mise.toml/.tool-versions, not pi's own) before handing off to
+# the pi-base omp shim. mise's own installer detects the container's arch, so
+# this stage carries no arch-specific logic. socat is installed here to run a
+# UNIX-to-TCP relay when HERDR_SOCKET_PATH/HERDR_BRIDGE_PORT are set, bridging
+# herdr's live sidebar agent-status socket across the container boundary.
+############################
+FROM pi-base AS pi-container
+
+RUN apt-get update && apt-get install -y --no-install-recommends socat \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://mise.run | sh
+ENV PATH=/root/.local/share/mise/shims:/root/.local/bin:$PATH
+
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -e' \
+    'if [ -n "${HERDR_SOCKET_PATH:-}" ] && [ -n "${HERDR_BRIDGE_PORT:-}" ]; then' \
+    '  mkdir -p "$(dirname "$HERDR_SOCKET_PATH")"' \
+    '  rm -f "$HERDR_SOCKET_PATH"' \
+    '  socat UNIX-LISTEN:"$HERDR_SOCKET_PATH",fork TCP:host.docker.internal:"$HERDR_BRIDGE_PORT" &' \
+    'fi' \
+    'cd "$PWD"' \
+    'if [ -f mise.toml ] || [ -f .mise.toml ] || [ -f .tool-versions ]; then' \
+    '  mise trust --quiet' \
+    '  mise install --quiet' \
+    'fi' \
+    'exec /usr/local/bin/omp "$@"' \
+    > /usr/local/bin/omp-container-entrypoint \
+    && chmod +x /usr/local/bin/omp-container-entrypoint
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/omp-container-entrypoint"]
