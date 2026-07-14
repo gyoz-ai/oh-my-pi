@@ -35,25 +35,49 @@ Everything below is discovered by the `omp` fork's extension/tool/agent loader a
 
 Enforces the fixed, session-wide engineering rules: dispatch discipline for the chief agent (only `task`/`todo`/`ask`/`irc`/`job`/`resolve`/`memorysearch`/`search_tool_bm25` are allowed at the chief level — everything else must run inside a subagent), a comment ban on `write`/`edit` to code files, a test skip-marker ban (`TODO`/`FIXME`/"for now"/etc. in test files), a `Cargo.lock` write guard, a memory-search-before-first-dispatch gate, and a mandatory post-`task` verification checklist appended to every subagent result. It used to also own bash-command filtering; that responsibility has moved out to `omp-bash-guard` (see below) so the two plugins now compose instead of overlapping.
 
+```
+omp plugin install github:gyoz-ai/omp-governance
+```
+
 ### omp-bash-guard — plugin (https://github.com/gyoz-ai/omp-bash-guard)
 
 Split out of `omp-governance`. Intercepts every `bash` tool call, splits it into segments on `;`/`&&`/`||`/`|`/newlines, and checks each segment through three tiers: hard blocks with no override (`git commit`, `git push`, `git reset --hard`, `git push --force`, package-registry `publish` commands, `rm -rf /...`, `sudo`), project-scoped blocks (e.g. `cargo test` → use `cargo nextest run`, gated on detecting a Rust project via `Cargo.toml`), and ask-first commands that get denied with a reason telling the agent to surface them to the user instead (`rm`, `git reset`, `curl`, `wget`, `chmod`, `dd`, `eval`, `source`, package-manager `install` commands).
+
+```
+omp plugin install github:gyoz-ai/omp-bash-guard
+```
 
 ### omp-memory — plugin + tool (https://github.com/gyoz-ai/omp-memory)
 
 A session-memory system backed by a local Typesense instance (bundled `docker-compose.yml`, auto-started on `session_start` if not already running). On `session_stop` it LLM-summarizes the session transcript into reusable facts and stores them tagged by project; every 5th capture also rolls facts up into a cross-project user-preference profile. It wraps `task` calls to diff the git working tree before/after and record what each subagent dispatch changed, and injects the most recent memory summaries plus the user profile into the chief's system prompt on `before_agent_start`. The companion `memorysearch` tool (vendored under `tools/`) lets the agent explicitly hybrid keyword+vector search past session memory mid-task — this is the tool step 8 of `omp-governance`'s rules requires before the chief's first dispatch each session.
 
+```
+omp plugin install github:gyoz-ai/omp-memory
+```
+
 ### omp-project-tools — tools only (no plugin) (https://github.com/gyoz-ai/omp-project-tools)
 
 Two standalone `CustomToolFactory` tools with no lifecycle hooks: `project_format` (runs `cargo fmt` for Rust, or the first matching `package.json` script out of `format`/`fmt`/`lint:fix`/`lint`/`prettier`/`biome:fix`/`biome:check` for TS/JS, package manager auto-detected from the lockfile) and `project_test` (runs `cargo nextest run`, optionally filtered, for Rust; or the first matching build/typecheck script followed by `test` for TS/JS). Both share a `lib/project-kind.ts` detector (Rust wins over TS if both markers are present).
+
+```
+omp plugin install github:gyoz-ai/omp-project-tools
+```
 
 ### omp-ponytail — plugin (https://github.com/gyoz-ai/omp-ponytail)
 
 Injects the minimality ("ponytail") doctrine into every agent's system prompt on `before_agent_start` — the YAGNI ladder (does this need to exist → stdlib → native platform feature → an already-installed dependency → one line → minimum code) plus a standing reminder that validation, error handling, security, and accessibility are never fair game for cutting. On `session_stop` (chief only — subagents never fire this event) it checks the last assistant message for a `PONYTAIL: PASS` marker; if missing, it returns one extra turn with a reminder instead of blocking, so the session always settles regardless of what the agent does with the nudge — it can never wedge a session.
 
+```
+omp plugin install github:gyoz-ai/omp-ponytail
+```
+
 ### omp-smith-agent — agent definition (https://github.com/gyoz-ai/omp-smith-agent)
 
 Not a plugin or a tool — a single agent markdown file (`omp-smith.md`) that becomes the `omp-smith` subagent role once symlinked into `~/.omp/agent/agents/`. Its system prompt bakes in the loader semantics and safe-cutover discipline documented across this whole ecosystem (top-level `index.ts` = one plugin, shared code must be vendored or live outside `extensions/`, tools are standalone factories, never `rm` — only `mv` into a backup directory) so that engineering work on any of the extensions above starts from the real rules instead of a re-explanation each time.
+
+```
+git clone https://github.com/gyoz-ai/omp-smith-agent && ln -s "$(pwd)/omp-smith-agent/omp-smith.md" ~/.omp/agent/agents/omp-smith.md
+```
 
 ## How it fits together
 
