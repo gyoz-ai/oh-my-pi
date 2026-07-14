@@ -978,27 +978,33 @@ export class PluginManager {
 					: `v${pluginPkg.version} - No omp/pi manifest (not an omp plugin)`,
 			});
 
-			// Check tools path exists if specified
+			// Check tools path(s) exist if specified
 			if (manifest?.tools) {
-				const toolsPath = path.join(pluginPath, manifest.tools);
-				if (!fs.existsSync(toolsPath)) {
-					checks.push({
-						name: `plugin:${name}:tools`,
-						status: "error",
-						message: `Tools entry "${manifest.tools}" not found`,
-					});
+				const toolsEntries = Array.isArray(manifest.tools) ? manifest.tools : [manifest.tools];
+				for (const toolsEntry of toolsEntries) {
+					const toolsPath = path.join(pluginPath, toolsEntry);
+					if (!fs.existsSync(toolsPath)) {
+						checks.push({
+							name: `plugin:${name}:tools`,
+							status: "error",
+							message: `Tools entry "${toolsEntry}" not found`,
+						});
+					}
 				}
 			}
 
-			// Check hooks path exists if specified
+			// Check hooks path(s) exist if specified
 			if (manifest?.hooks) {
-				const hooksPath = path.join(pluginPath, manifest.hooks);
-				if (!fs.existsSync(hooksPath)) {
-					checks.push({
-						name: `plugin:${name}:hooks`,
-						status: "error",
-						message: `Hooks entry "${manifest.hooks}" not found`,
-					});
+				const hooksEntries = Array.isArray(manifest.hooks) ? manifest.hooks : [manifest.hooks];
+				for (const hooksEntry of hooksEntries) {
+					const hooksPath = path.join(pluginPath, hooksEntry);
+					if (!fs.existsSync(hooksPath)) {
+						checks.push({
+							name: `plugin:${name}:hooks`,
+							status: "error",
+							message: `Hooks entry "${hooksEntry}" not found`,
+						});
+					}
 				}
 			}
 
