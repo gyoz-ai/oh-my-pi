@@ -90,6 +90,15 @@ if [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_SOCKET_PATH:-}" ] && [ -S "$HERDR
 	fi
 fi
 
+typesense_container=opencode-typesense
+typesense_network=$(docker inspect "$typesense_container" --format '{{range $net, $v := .NetworkSettings.Networks}}{{$net}}{{end}}' 2>/dev/null || true)
+
+if [ -n "$typesense_network" ]; then
+	set -- --network "$typesense_network" -e "TYPESENSE_URL=${TYPESENSE_URL:-http://$typesense_container:8108}" -e "TYPESENSE_KEY=${TYPESENSE_KEY:-opencode-local-key}" "$@"
+else
+	set -- -e "TYPESENSE_URL=${TYPESENSE_URL:-http://host.docker.internal:8108}" -e "TYPESENSE_KEY=${TYPESENSE_KEY:-opencode-local-key}" "$@"
+fi
+
 set -- \
 	-v "$repo_dir:$repo_dir" \
 	-w "$repo_dir" \
