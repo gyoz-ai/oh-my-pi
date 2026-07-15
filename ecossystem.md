@@ -79,6 +79,34 @@ Not a plugin or a tool — a single agent markdown file (`omp-smith.md`) that be
 git clone https://github.com/gyoz-ai/omp-smith-agent && ln -s "$(pwd)/omp-smith-agent/omp-smith.md" ~/.omp/agent/agents/omp-smith.md
 ```
 
+## Recommended third-party herdr plugins
+
+These are external, community-authored `herdr` plugins that the gyoz-ai team uses and recommends day to day — unlike the extensions above, they are not gyoz-ai projects and are not maintained by this org.
+
+### herdr-file-viewer — herdr plugin (https://github.com/smarzban/herdr-file-viewer)
+
+A git-aware, read-only file viewer TUI you open in a herdr split pane or tab.
+
+```
+herdr plugin install github:smarzban/herdr-file-viewer
+```
+
+### Herdr Plus — herdr plugin (https://github.com/cloudmanic/herdr-plus)
+
+A projects picker for fuzzy-launching declarative workspace templates, plus a Quick Actions fuzzy script launcher.
+
+```
+herdr plugin install github:cloudmanic/herdr-plus
+```
+
+### reviewr — herdr plugin (https://github.com/persiyanov/reviewr)
+
+A native terminal code-review sidebar pane for herdr.
+
+```
+herdr plugin install github:persiyanov/reviewr
+```
+
 ## How it fits together
 
 A user runs `omp` (the fork) inside a `herdr`-managed pane (the other fork); `omp` reports its live subagent tree to `herdr` over the socket protocol both forks were extended to speak, and `herdr`'s sidebar renders and lets you navigate that tree. Inside the `omp` process, `omp-governance` and `omp-bash-guard` constrain what the agent is allowed to do, `omp-memory` and `omp-smith-agent` give it continuity and expertise across sessions, `omp-project-tools` gives it project-agnostic build/test/format commands, and `omp-ponytail` keeps its output lean. Every one of the six extension repos is installed by symlinking the repo (or a file inside it) into `~/.omp/agent/`, so upgrading any single piece is a `git pull` in that repo with no redeploy step — the loader live-reloads on file-change mtime.

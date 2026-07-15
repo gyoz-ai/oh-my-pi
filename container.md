@@ -52,11 +52,11 @@ omp-container                  # builds pi-container on first run, then launches
 ```
 
 For repos whose test suite spins up its own containers via testcontainers
-(e.g. monadmap), pass `--docker-socket` as the first argument to additionally
+(e.g. any local project), pass `--docker-socket` as the first argument to additionally
 mount the host Docker socket into the container:
 
 ```sh
-cd ~/code/monadmap
+cd ~/code/your-project
 omp-container --docker-socket
 ```
 
