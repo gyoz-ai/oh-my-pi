@@ -1,9 +1,10 @@
-import { beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
@@ -202,6 +203,10 @@ describe("InputController main-screen mouse click", () => {
 		await initTheme();
 	});
 
+	afterEach(() => {
+		AgentRegistry.resetGlobalForTests();
+	});
+
 	it("decodes and consumes SGR mouse bytes without leaking them into the editor", async () => {
 		const { ctx, editor, spies } = createContext();
 		const controller = new InputController(ctx);
@@ -290,7 +295,8 @@ describe("InputController main-screen mouse click", () => {
 		expect(spies.showStatus).not.toHaveBeenCalled();
 	});
 
-	it("clicking a settled task row in a job poll block focuses that job's agent", async () => {
+	it("clicking a settled task row in a job poll block focuses that job's agent when registered", async () => {
+		AgentRegistry.global().register({ id: "TaskAgent1", displayName: "TaskAgent1", kind: "sub", session: null });
 		const { ctx, spies } = createContext();
 		const uiStub = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 		const jobBlock = new ToolExecutionComponent("hub", { op: "wait" }, {}, undefined, uiStub, process.cwd());
@@ -319,6 +325,43 @@ describe("InputController main-screen mouse click", () => {
 		await Promise.resolve();
 
 		expect(spies.focusAgentSession).toHaveBeenCalledWith("TaskAgent1");
+	});
+
+	it("clicking a settled task row that failed before agent registration is a silent no-op", async () => {
+		const { ctx, spies } = createContext();
+		const uiStub = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
+		const jobBlock = new ToolExecutionComponent("hub", { op: "wait" }, {}, undefined, uiStub, process.cwd());
+		jobBlock.updateResult(
+			{
+				content: [{ type: "text", text: "" }],
+				details: {
+					op: "wait",
+					jobs: [
+						{
+							id: "BigWinScout",
+							type: "task",
+							status: "failed",
+							label: "BigWinScout",
+							durationMs: 6,
+							errorText: 'Unknown agent "explore". Available: task, scout',
+						},
+					],
+				},
+			},
+			false,
+		);
+		jobBlock.render(120);
+		spies.hitTestScreenRow.mockReturnValue({ component: ctx.chatContainer, localRow: 6 });
+		spies.chatContainerHitTestBlock.mockReturnValue({ component: jobBlock, localRow: 1 });
+		const controller = new InputController(ctx);
+		controller.setupKeyHandlers();
+
+		const listeners = registeredInputListeners(spies.addInputListener);
+		dispatchInput(listeners, sgrPress(3, 5));
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(spies.focusAgentSession).not.toHaveBeenCalled();
 	});
 
 	it("clicking a settled bash row in a job poll block is a silent no-op", async () => {

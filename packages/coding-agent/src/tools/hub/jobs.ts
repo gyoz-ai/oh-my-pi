@@ -11,6 +11,7 @@ import type { AsyncJob, AsyncJobManager } from "../../async";
 import { settings } from "../../config/settings";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
 import type { AgentRowTarget } from "../../modes/components/transcript-container";
+import { AgentRegistry } from "../../registry/agent-registry";
 import { shimmerEnabled, shimmerText } from "../../modes/theme/shimmer";
 import type { Theme } from "../../modes/theme/theme";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
@@ -619,7 +620,8 @@ export function jobsRenderResult(
 					maxCollapsed: COLLAPSED_LIST_LIMIT,
 					itemType: "job",
 					renderItem: job => {
-						const rowAgentId = job.type === "task" ? job.id : undefined;
+						const jobRef = job.type === "task" ? AgentRegistry.global().get(job.id) : undefined;
+						const rowAgentId = jobRef && jobRef.status !== "aborted" ? job.id : undefined;
 						const lines: string[] = [];
 						const icon = formatStatusIcon(
 							statusToIcon(job.status),

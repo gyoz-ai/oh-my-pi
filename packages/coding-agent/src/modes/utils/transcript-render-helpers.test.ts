@@ -1,6 +1,7 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
-import { Text } from "@oh-my-pi/pi-tui";
+import type { Text } from "@oh-my-pi/pi-tui";
+import { AgentRegistry } from "../../registry/agent-registry";
 import type { CustomMessage } from "../../session/messages";
 import { initTheme } from "../theme/theme";
 import { assistantUsageIsBilled, buildAsyncResultBlock } from "./transcript-render-helpers";
@@ -56,12 +57,41 @@ describe("buildAsyncResultBlock", () => {
 		await initTheme();
 	});
 
-	it("makes a task-typed row a click target and appends the click-here hint", () => {
+	beforeEach(() => {
+		AgentRegistry.resetGlobalForTests();
+	});
+
+	afterEach(() => {
+		AgentRegistry.resetGlobalForTests();
+	});
+
+	it("makes a resolvable task-typed row a click target and appends the click-here hint", () => {
+		AgentRegistry.global().register({ id: "task-1", displayName: "task-1", kind: "sub", session: null });
 		const block = buildAsyncResultBlock(asyncResultMessage({ jobId: "task-1", type: "task", label: "explore" }));
 		expect(block.agentIdAtLocalRow(0)).toBe("task-1");
 		const line = Bun.stripANSI((block.children[0] as Text).getText());
 		expect(line).toContain("Background job completed");
 		expect(line).toContain("(click here to see output)");
+	});
+
+	it("leaves an unresolvable task-typed row (never registered) unclickable with no hint", () => {
+		const block = buildAsyncResultBlock(asyncResultMessage({ jobId: "explore", type: "task", label: "explore" }));
+		expect(block.agentIdAtLocalRow(0)).toBeUndefined();
+		const line = Bun.stripANSI((block.children[0] as Text).getText());
+		expect(line).toContain("Background job completed");
+		expect(line).not.toContain("click here");
+	});
+
+	it("leaves an aborted task-typed row unclickable with no hint", () => {
+		AgentRegistry.global().register({
+			id: "task-2",
+			displayName: "task-2",
+			kind: "sub",
+			session: null,
+			status: "aborted",
+		});
+		const block = buildAsyncResultBlock(asyncResultMessage({ jobId: "task-2", type: "task", label: "explore" }));
+		expect(block.agentIdAtLocalRow(0)).toBeUndefined();
 	});
 
 	it("leaves a bash-typed row unclickable with no hint", () => {
@@ -73,6 +103,7 @@ describe("buildAsyncResultBlock", () => {
 	});
 
 	it("resolves each row independently in a mixed batch", () => {
+		AgentRegistry.global().register({ id: "task-1", displayName: "task-1", kind: "sub", session: null });
 		const block = buildAsyncResultBlock(
 			asyncResultMessage({
 				jobs: [

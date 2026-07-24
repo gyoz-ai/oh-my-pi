@@ -1,7 +1,8 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentRowTarget } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
 import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { hubToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/hub";
 import type { Component } from "@oh-my-pi/pi-tui";
 
@@ -37,7 +38,16 @@ describe("job renderer settled-row click targets", () => {
 		resetSettingsForTest();
 	});
 
-	it("resolves a settled task row to its agent id at the exact local row", () => {
+	beforeEach(() => {
+		AgentRegistry.resetGlobalForTests();
+	});
+
+	afterEach(() => {
+		AgentRegistry.resetGlobalForTests();
+	});
+
+	it("resolves a settled task row to its agent id at the exact local row when the agent is registered", () => {
+		AgentRegistry.global().register({ id: "TaskAgent1", displayName: "TaskAgent1", kind: "sub", session: null });
 		const { lines, component } = renderJobs([
 			{
 				id: "TaskAgent1",
@@ -62,6 +72,22 @@ describe("job renderer settled-row click targets", () => {
 		expect(component.agentIdAtLocalRow(2)).toBeUndefined();
 	});
 
+	it("resolves a settled task row that failed before agent registration to undefined", () => {
+		const { component } = renderJobs([
+			{
+				id: "BigWinScout",
+				type: "task",
+				status: "failed",
+				label: "BigWinScout",
+				durationMs: 6,
+				errorText: 'Unknown agent "explore". Available: task, scout',
+			},
+		]);
+
+		expect(component.agentIdAtLocalRow(0)).toBeUndefined();
+		expect(component.agentIdAtLocalRow(1)).toBeUndefined();
+	});
+
 	it("resolves every row of a bash-only settled block to undefined", () => {
 		const { component } = renderJobs([
 			{ id: "bash-1", type: "bash", status: "completed", label: "echo hi", durationMs: 500 },
@@ -73,7 +99,13 @@ describe("job renderer settled-row click targets", () => {
 		expect(component.agentIdAtLocalRow(2)).toBeUndefined();
 	});
 
-	it("maps every wrapped label/preview row of a settled task job to the same agent id", () => {
+	it("maps every wrapped label/preview row of a settled task job to the same agent id when registered", () => {
+		AgentRegistry.global().register({
+			id: "MultiLineAgent",
+			displayName: "MultiLineAgent",
+			kind: "sub",
+			session: null,
+		});
 		const { lines, component } = renderJobs([
 			{
 				id: "MultiLineAgent",

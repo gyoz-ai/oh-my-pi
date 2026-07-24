@@ -1,9 +1,10 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import type { AgentRowTarget } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
 import { TranscriptContainer } from "@oh-my-pi/pi-coding-agent/modes/components/transcript-container";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { TUI } from "@oh-my-pi/pi-tui";
 
 function buildSettledJobBlock(jobs: Array<Record<string, unknown>>) {
@@ -27,7 +28,12 @@ describe("settled job block click targets through the transcript hit-map", () =>
 		resetSettingsForTest();
 	});
 
+	afterEach(() => {
+		AgentRegistry.resetGlobalForTests();
+	});
+
 	it("resolves a settled task row to its agent id and a bash row to undefined at the exact frame rows", () => {
+		AgentRegistry.global().register({ id: "TaskAgent1", displayName: "TaskAgent1", kind: "sub", session: null });
 		const container = buildSettledJobBlock([
 			{ id: "TaskAgent1", type: "task", status: "completed", label: "TaskAgent1", durationMs: 1_200 },
 			{ id: "bash-1", type: "bash", status: "completed", label: "echo hi", durationMs: 500 },

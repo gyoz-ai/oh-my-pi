@@ -7,6 +7,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
 import { formatBytes, formatDuration } from "@oh-my-pi/pi-utils";
+import { AgentRegistry } from "../../registry/agent-registry";
 import {
 	type CustomMessage,
 	type FileMentionMessage,
@@ -67,7 +68,8 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): TranscriptB
 		const jobId = job.jobId ?? "unknown";
 		const typeLabel = job.type ? `[${job.type}]` : "[job]";
 		const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
-		const clickable = job.type === "task" && !!job.jobId;
+		const ref = job.jobId ? AgentRegistry.global().get(job.jobId) : undefined;
+		const clickable = job.type === "task" && !!ref && ref.status !== "aborted";
 		const line =
 			[
 				theme.fg("success", `${theme.status.done} Background job completed`),
