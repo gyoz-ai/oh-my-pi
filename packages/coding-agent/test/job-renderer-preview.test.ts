@@ -138,7 +138,7 @@ describe("job renderer task-result preview", () => {
 			},
 		];
 
-		it("shows all jobs when isPartial is true", () => {
+		it("suppresses running task jobs from the live poll render", () => {
 			const result = {
 				content: [{ type: "text" as const, text: "" }],
 				details: { op: "wait" as const, jobs: jobsData },
@@ -150,10 +150,66 @@ describe("job renderer task-result preview", () => {
 				{ op: "wait", ids: [] },
 			);
 			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
-			expect(output).toContain("Job1 running");
+			expect(output).not.toContain("Job1 running");
 			expect(output).toContain("Job2 completed");
-			expect(output).toContain("Job3 running");
-			expect(output).toContain("waiting on 2 of 3 jobs");
+			expect(output).not.toContain("Job3 running");
+			expect(output).toContain("1 job settled");
+		});
+
+		it("keeps running bash jobs in the live poll render", () => {
+			const result = {
+				content: [{ type: "text" as const, text: "" }],
+				details: {
+					op: "wait" as const,
+					jobs: [
+						{
+							id: "job-bash-1",
+							type: "bash" as const,
+							status: "running" as const,
+							label: "Build running",
+							durationMs: 900,
+						},
+						...jobsData,
+					],
+				},
+			};
+			const component = hubToolRenderer.renderResult(
+				result,
+				{ expanded: true, isPartial: true } as Parameters<typeof hubToolRenderer.renderResult>[1],
+				theme,
+				{ op: "wait", ids: [] },
+			);
+			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
+			expect(output).toContain("Build running");
+			expect(output).toContain("Job2 completed");
+			expect(output).not.toContain("Job1 running");
+			expect(output).not.toContain("Job3 running");
+			expect(output).toContain("waiting on 1 of 2 jobs");
+		});
+
+		it("renders nothing live while only task jobs are running", () => {
+			const result = {
+				content: [{ type: "text" as const, text: "" }],
+				details: {
+					op: "wait" as const,
+					jobs: [
+						{
+							id: "Job1",
+							type: "task" as const,
+							status: "running" as const,
+							label: "Job1 running",
+							durationMs: 1200,
+						},
+					],
+				},
+			};
+			const component = hubToolRenderer.renderResult(
+				result,
+				{ expanded: true, isPartial: true } as Parameters<typeof hubToolRenderer.renderResult>[1],
+				theme,
+				{ op: "wait", ids: [] },
+			);
+			expect(component.render(120) as readonly string[]).toHaveLength(0);
 		});
 
 		it("shows only finished jobs when isPartial is false and it is a poll call", () => {

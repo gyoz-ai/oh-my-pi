@@ -529,6 +529,13 @@ export function jobsRenderResult(
 
 	const isPollCall = args ? !args.list && (!args.cancel || args.cancel.length === 0 || args.poll !== undefined) : true;
 
+	if (options.isPartial && isPollCall) {
+		jobs = jobs.filter(job => !(job.type === "task" && job.status === "running"));
+		if (jobs.length === 0) {
+			return new Text("", 0, 0);
+		}
+	}
+
 	// Agent-carrying results (jobs snapshot / empty-wait roster) are real
 	// snapshots, not displaceable waiting frames — only agentless waits
 	// collapse their still-running rows once sealed.
