@@ -3261,11 +3261,16 @@ describe("TUI terminal-state regressions", () => {
 			const tui = new TUI(term);
 			tui.addChild(new MutableLinesComponent(rows("base-", 8)));
 
+			let stopped = false;
+
 			try {
 				tui.start();
 				await settle(term);
 
 				const showFrom = writes.length;
+				const startWrites = writes.slice(0, showFrom).join("");
+				expect(startWrites).toContain("\x1b[?1000h");
+				expect(startWrites).toContain("\x1b[?1006h");
 				const handle = tui.showOverlay(new MutableLinesComponent(["MODAL-0", "MODAL-1"]), {
 					anchor: "bottom-center",
 					width: "100%",
@@ -3283,9 +3288,8 @@ describe("TUI terminal-state regressions", () => {
 				// inside fullscreen overlays (settings Esc bug).
 				expect(modalWrites).toContain("\x1b[?1049h\x1b[>1u");
 				// … enabled mouse tracking for click/scroll/hover support …
-				expect(modalWrites).toContain("\x1b[?1000h");
 				expect(modalWrites).toContain("\x1b[?1003h"); // any-motion tracking drives hover
-				expect(modalWrites).toContain("\x1b[?1006h");
+				expect(modalWrites).not.toContain("\x1b[?1000h");
 				// … and never erased scrollback (ED3) or otherwise touched the transcript.
 				expect(modalWrites).not.toContain("\x1b[3J");
 				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeTrue();
@@ -3301,12 +3305,19 @@ describe("TUI terminal-state regressions", () => {
 				// Mouse tracking is disabled again so the rest of the app keeps native
 				// terminal selection.
 				expect(hideWrites).toContain("\x1b[?1003l"); // motion tracking torn down too
-				expect(hideWrites).toContain("\x1b[?1000l");
+				expect(hideWrites).not.toContain("\x1b[?1000l");
 				// Transcript is back on the normal screen after leaving the alt buffer.
 				expect(visible(term).some(line => line.includes("base-"))).toBeTrue();
 				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeFalse();
-			} finally {
+
+				const stopFrom = writes.length;
 				tui.stop();
+				stopped = true;
+				const stopWrites = writes.slice(stopFrom).join("");
+				expect(stopWrites).toContain("\x1b[?1000l");
+				expect(stopWrites).toContain("\x1b[?1006l");
+			} finally {
+				if (!stopped) tui.stop();
 			}
 		});
 

@@ -85,8 +85,10 @@ const CURSOR_END_NO_SYNC = "";
 // hover targets, and 1006h = SGR extended coordinates past column/row 223.
 // Selection-first overlays leave these modes disabled so the terminal retains
 // native text selection.
-const MOUSE_TRACKING_ON = "\x1b[?1000h\x1b[?1003h\x1b[?1006h";
-const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1003l\x1b[?1000l";
+const MOUSE_CLICK_TRACKING_ON = "\x1b[?1000h\x1b[?1006h";
+const MOUSE_CLICK_TRACKING_OFF = "\x1b[?1006l\x1b[?1000l";
+const MOUSE_MOTION_TRACKING_ON = "\x1b[?1003h";
+const MOUSE_MOTION_TRACKING_OFF = "\x1b[?1003l";
 const ALT_SCREEN_ENTER = "\x1b[?1049h";
 const ALT_SCREEN_EXIT = "\x1b[?1049l";
 
@@ -1453,6 +1455,14 @@ export class TUI extends Container {
 	getFocused(): Component | null {
 		return this.#focusedComponent;
 	}
+	hitTestScreenRow(screenRow: number): { component: Component; localRow: number } | undefined {
+		const frameRow = this.#windowTopRow + screenRow;
+		for (const segment of this.#frameSegments) {
+			if (frameRow < segment.start || frameRow >= segment.start + segment.rowCount) continue;
+			return { component: segment.component, localRow: frameRow - segment.start };
+		}
+		return undefined;
+	}
 
 	/**
 	 * Show an overlay component with configurable positioning and sizing.
@@ -1604,6 +1614,7 @@ export class TUI extends Container {
 			() => this.stop(),
 		);
 		if (this.#stopped) return;
+		this.terminal.write(MOUSE_CLICK_TRACKING_ON);
 		for (const listener of this.#startListeners) {
 			try {
 				listener();
@@ -1792,7 +1803,7 @@ export class TUI extends Container {
 			this.terminal.write(this.#leaveResizeAltSequence());
 		}
 		if (this.#altActive || this.#pendingAltExit) {
-			const mouseExit = this.#altMouseTrackingActive ? MOUSE_TRACKING_OFF : "";
+			const mouseExit = this.#altMouseTrackingActive ? MOUSE_MOTION_TRACKING_OFF : "";
 			const exitSequence = this.#pendingAltExit || `${mouseExit}${this.#keyboardEnhancementExit()}\x1b[?1049l`;
 			this.terminal.write(exitSequence);
 			setAltScreenActive(false);
@@ -1801,6 +1812,7 @@ export class TUI extends Container {
 			this.#altPreviousLines = [];
 			this.#pendingAltExit = "";
 		}
+		this.terminal.write(MOUSE_CLICK_TRACKING_OFF);
 		this.#purgeInlineImages();
 		this.#clearSixelProbeState();
 		this.#stopped = true;
@@ -2785,7 +2797,7 @@ export class TUI extends Container {
 			// modified-key reporting sequence on the freshly entered alternate
 			// screen, or Esc/modified keys revert to legacy encoding inside
 			// fullscreen overlays (Ghostty/kitty/iTerm2).
-			const mouseEnter = wantMouseTracking ? MOUSE_TRACKING_ON : "";
+			const mouseEnter = wantMouseTracking ? MOUSE_MOTION_TRACKING_ON : "";
 			this.terminal.write(`\x1b[?1049h${this.#keyboardEnhancementEnter()}${mouseEnter}`);
 			setAltScreenActive(true);
 			this.terminal.hideCursor();
@@ -2797,7 +2809,7 @@ export class TUI extends Container {
 			this.#altEnterWidth = width;
 			this.#altEnterHeight = height;
 		} else if (!wantAlt && this.#altActive) {
-			const mouseExit = this.#altMouseTrackingActive ? MOUSE_TRACKING_OFF : "";
+			const mouseExit = this.#altMouseTrackingActive ? MOUSE_MOTION_TRACKING_OFF : "";
 			const enhancementExit = this.#keyboardEnhancementExit();
 			const exitSequence = `${mouseExit}${enhancementExit}\x1b[?1049l`;
 			// Session replacement can finish while a fullscreen selector is still
@@ -2820,7 +2832,7 @@ export class TUI extends Container {
 				this.#resizeEventPending = true;
 			}
 		} else if (wantMouseTracking !== this.#altMouseTrackingActive) {
-			this.terminal.write(wantMouseTracking ? MOUSE_TRACKING_ON : MOUSE_TRACKING_OFF);
+			this.terminal.write(wantMouseTracking ? MOUSE_MOTION_TRACKING_ON : MOUSE_MOTION_TRACKING_OFF);
 			this.#altMouseTrackingActive = wantMouseTracking;
 		}
 		if (this.#altActive) {
