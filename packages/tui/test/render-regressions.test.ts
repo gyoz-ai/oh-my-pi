@@ -3306,6 +3306,7 @@ describe("TUI terminal-state regressions", () => {
 				// terminal selection.
 				expect(hideWrites).toContain("\x1b[?1003l"); // motion tracking torn down too
 				expect(hideWrites).not.toContain("\x1b[?1000l");
+				expect(hideWrites).toContain("\x1b[?1000h\x1b[?1006h");
 				// Transcript is back on the normal screen after leaving the alt buffer.
 				expect(visible(term).some(line => line.includes("base-"))).toBeTrue();
 				expect(visible(term).some(line => line.includes("MODAL-0"))).toBeFalse();

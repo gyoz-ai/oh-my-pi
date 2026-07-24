@@ -2811,7 +2811,7 @@ export class TUI extends Container {
 		} else if (!wantAlt && this.#altActive) {
 			const mouseExit = this.#altMouseTrackingActive ? MOUSE_MOTION_TRACKING_OFF : "";
 			const enhancementExit = this.#keyboardEnhancementExit();
-			const exitSequence = `${mouseExit}${enhancementExit}\x1b[?1049l`;
+			const exitSequence = `${mouseExit}${enhancementExit}\x1b[?1049l${MOUSE_CLICK_TRACKING_ON}`;
 			// Session replacement can finish while a fullscreen selector is still
 			// covering the old normal buffer. Keep the overlay visible until the
 			// replacement is ready, then fuse the buffer restore into that full paint;
