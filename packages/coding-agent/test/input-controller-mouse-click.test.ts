@@ -393,4 +393,44 @@ describe("InputController main-screen mouse click", () => {
 
 		expect(spies.focusAgentSession).not.toHaveBeenCalled();
 	});
+
+	it("clicking a rendered codeblock copies it and toasts", async () => {
+		const { ctx, spies } = createContext();
+		spies.hitTestScreenRow.mockReturnValue({ component: ctx.chatContainer, localRow: 4 });
+		spies.chatContainerHitTestBlock.mockReturnValue({
+			component: { codeBlockAtLocalRow: (row: number) => (row === 1 ? "CODE" : undefined) },
+			localRow: 1,
+		});
+		const controller = new InputController(ctx);
+		controller.setupKeyHandlers();
+
+		const listeners = registeredInputListeners(spies.addInputListener);
+		dispatchInput(listeners, sgrPress(3, 5));
+		await Promise.resolve();
+
+		expect(spies.showStatus).toHaveBeenCalledWith("Copied code block to clipboard");
+		expect(spies.focusAgentSession).not.toHaveBeenCalled();
+	});
+
+	it("agent-row focus takes precedence over codeblock copy", async () => {
+		const { ctx, spies } = createContext();
+		spies.hitTestScreenRow.mockReturnValue({ component: ctx.chatContainer, localRow: 4 });
+		spies.chatContainerHitTestBlock.mockReturnValue({
+			component: {
+				agentIdAtLocalRow: (row: number) => (row === 1 ? "Worker" : undefined),
+				codeBlockAtLocalRow: () => "CODE",
+			},
+			localRow: 1,
+		});
+		const controller = new InputController(ctx);
+		controller.setupKeyHandlers();
+
+		const listeners = registeredInputListeners(spies.addInputListener);
+		dispatchInput(listeners, sgrPress(3, 5));
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(spies.focusAgentSession).toHaveBeenCalledWith("Worker");
+		expect(spies.showStatus).not.toHaveBeenCalledWith("Copied code block to clipboard");
+	});
 });

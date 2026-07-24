@@ -164,6 +164,10 @@ function lerpHex(from: string, to: string, t: number): string {
 	return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
 }
 
+export interface CodeBlockRowTarget {
+	codeBlockAtLocalRow(localRow: number): string | undefined;
+}
+
 /**
  * Component that renders a complete assistant message
  */
@@ -290,6 +294,24 @@ export class AssistantMessageComponent extends Container {
 	override render(width: number): readonly string[] {
 		this.#lastRenderWidth = width;
 		return super.render(width);
+	}
+
+	codeBlockAtLocalRow(localRow: number): string | undefined {
+		const width = this.#lastRenderWidth;
+		if (width <= 0 || localRow < 0) return undefined;
+		const raw = this.render(width);
+		let leading = 0;
+		while (leading < raw.length && !/\S/.test(raw[leading]!)) leading++;
+		const target = localRow + leading;
+		let row = this.#markerSlot.render(width).length;
+		for (const child of this.#contentContainer.children) {
+			const height = child.render(width).length;
+			if (target < row + height) {
+				return child instanceof Markdown ? child.codeBlockAtRow(target - row) : undefined;
+			}
+			row += height;
+		}
+		return undefined;
 	}
 
 	setHideThinkingBlock(hide: boolean): void {

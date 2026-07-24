@@ -656,6 +656,7 @@ const EMPTY_RENDER_LINES: readonly string[] = [];
 interface RenderCacheEntry {
 	lines: readonly string[];
 	tables: readonly RenderedTableLayout[];
+	codeBlocks: readonly CodeBlockLayout[];
 }
 
 const renderCache = new LRUCache<string, RenderCacheEntry>({
@@ -674,6 +675,7 @@ function renderedLinesCacheSize(lines: readonly string[]): number {
 function renderCacheEntrySize(entry: RenderCacheEntry): number {
 	let size = renderedLinesCacheSize(entry.lines);
 	for (const table of entry.tables) size += table.key.length + table.columnWidths.length + 4;
+	for (const b of entry.codeBlocks) size += b.code.length;
 	return size;
 }
 
@@ -1034,6 +1036,12 @@ interface RenderedTableLayout extends TableLayoutLock {
 	endRow: number;
 }
 
+interface CodeBlockLayout {
+	startRow: number;
+	endRow: number;
+	code: string;
+}
+
 export class Markdown implements Component, NativeScrollbackCommittedRows, NativeScrollbackReplay {
 	#text: string;
 	#paddingX: number; // Left/right padding
@@ -1089,6 +1097,8 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 	#lockedTableLayouts = new Map<string, TableLayoutLock>();
 	#lastRenderedTableLayouts: RenderedTableLayout[] = [];
 	#activeTableRenderSpecs?: TableRenderSpec[];
+	#lastRenderedCodeBlocks: CodeBlockLayout[] = [];
+	#activeCodeBlockSpecs?: CodeBlockLayout[];
 
 	#ignoreTight = false;
 
@@ -1307,6 +1317,7 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 			this.#cachedText = this.#text;
 			this.#cachedWidth = width;
 			this.#cachedLines = EMPTY_RENDER_LINES;
+			this.#lastRenderedCodeBlocks = [];
 			return EMPTY_RENDER_LINES;
 		}
 
@@ -1338,6 +1349,7 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 					...table,
 					columnWidths: table.columnWidths.slice(),
 				}));
+				this.#lastRenderedCodeBlocks = cached.codeBlocks.map(b => ({ ...b }));
 				// Populate L1 so subsequent calls from this instance are O(1) map lookup.
 				this.#cachedText = this.#text;
 				this.#cachedWidth = width;
@@ -1351,6 +1363,8 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		let contentLines: string[];
 		const tableRenderSpecs: TableRenderSpec[] = [];
 		this.#activeTableRenderSpecs = tableRenderSpecs;
+		const codeBlockSpecs: CodeBlockLayout[] = [];
+		this.#activeCodeBlockSpecs = codeBlockSpecs;
 		this.#activeRenderSignature = signature;
 		try {
 			contentLines = this.transientRenderCache
@@ -1359,8 +1373,15 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 		} finally {
 			this.#activeRenderSignature = undefined;
 			this.#activeTableRenderSpecs = undefined;
+			this.#activeCodeBlockSpecs = undefined;
 		}
 		this.#lastRenderedTableLayouts = this.#resolveRenderedTableLayouts(tableRenderSpecs, signature.paddingY);
+		const topPadding = signature.paddingY;
+		this.#lastRenderedCodeBlocks = codeBlockSpecs.map(b => ({
+			startRow: b.startRow + topPadding,
+			endRow: b.endRow + topPadding,
+			code: b.code,
+		}));
 		const emptyLines = this.#renderEmptyPaddingLines(signature);
 
 		// Combine top padding, content, and bottom padding
@@ -1383,10 +1404,18 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 					...table,
 					columnWidths: table.columnWidths.slice(),
 				})),
+				codeBlocks: this.#lastRenderedCodeBlocks.map(b => ({ ...b })),
 			});
 		}
 
 		return result;
+	}
+
+	codeBlockAtRow(row: number): string | undefined {
+		for (const b of this.#lastRenderedCodeBlocks) {
+			if (row >= b.startRow && row < b.endRow) return b.code;
+		}
+		return undefined;
 	}
 
 	#renderSignature(width: number, paddingX: number): RenderSignature {
@@ -1571,6 +1600,14 @@ export class Markdown implements Component, NativeScrollbackCommittedRows, Nativ
 					spec.startRow = tokenRowStart + tokenLineOffsets[relativeStart]!;
 					spec.endRow = tokenRowStart + tokenLineOffsets[relativeEnd]!;
 				}
+			}
+			if (token.type === "code" && this.#activeCodeBlockSpecs) {
+				const codeText = "text" in token && typeof token.text === "string" ? token.text : "";
+				this.#activeCodeBlockSpecs.push({
+					startRow: tokenRowStart,
+					endRow: rowOffset + wrappedLines.length,
+					code: codeText,
+				});
 			}
 			sourceOffset += token.raw.length;
 		}

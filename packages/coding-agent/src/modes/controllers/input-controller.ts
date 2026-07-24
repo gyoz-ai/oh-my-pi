@@ -7,7 +7,7 @@ import { $env, isEnoent, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { AsyncJobManager } from "../../async/job-manager";
 import { isSettingsInitialized, settings } from "../../config/settings";
 import { resolveLocalRoot } from "../../internal-urls";
-import { AssistantMessageComponent } from "../../modes/components/assistant-message";
+import { AssistantMessageComponent, type CodeBlockRowTarget } from "../../modes/components/assistant-message";
 import { extractImagePathFromText } from "../../modes/components/custom-editor";
 import { renderSegmentTrack } from "../../modes/components/segment-track";
 import { TinyTitleDownloadProgressComponent } from "../../modes/components/tiny-title-download-progress";
@@ -604,9 +604,18 @@ export class InputController {
 		if (!hit) return;
 		if (hit.component === this.ctx.chatContainer) {
 			const block = this.ctx.chatContainer.hitTestBlock(hit.localRow);
-			const target = block?.component as Partial<AgentRowTarget> | undefined;
-			const agentId = target?.agentIdAtLocalRow?.(block?.localRow ?? -1);
-			if (agentId) this.#focusAgentById(agentId);
+			const localRow = block?.localRow ?? -1;
+			const target = block?.component as Partial<AgentRowTarget & CodeBlockRowTarget> | undefined;
+			const agentId = target?.agentIdAtLocalRow?.(localRow);
+			if (agentId) {
+				this.#focusAgentById(agentId);
+				return;
+			}
+			const code = target?.codeBlockAtLocalRow?.(localRow);
+			if (code !== undefined) {
+				void copyToClipboard(code);
+				this.ctx.showStatus("Copied code block to clipboard");
+			}
 			return;
 		}
 		if (hit.component === this.ctx.subagentContainer) {
