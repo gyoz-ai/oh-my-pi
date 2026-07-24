@@ -43,6 +43,7 @@ import { TODO_STRIKE_TOTAL_FRAMES, type TodoToolDetails } from "../../tools/todo
 import { isFramedBlockComponent, markFramedBlockComponent, renderStatusLine, WidthAwareText } from "../../tui";
 import { sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
 import { renderDiff } from "./diff";
+import type { AgentRowTarget } from "./transcript-container";
 
 /**
  * Drop trailing removal/hunk-header lines that appear in a streaming diff
@@ -277,12 +278,13 @@ let toolExecutionInstanceSeq = 0;
 /**
  * Component that renders a tool call with its result (updateable)
  */
-export class ToolExecutionComponent extends Container implements NativeScrollbackLiveRegion {
+export class ToolExecutionComponent extends Container implements NativeScrollbackLiveRegion, AgentRowTarget {
 	#contentBox: Box; // Used for custom tools and bash visual truncation
 	#contentText: WidthAwareText; // Generic fallback (no custom/built-in renderer)
 	#multiFileBoxes: (Box | Spacer)[] = []; // Extra boxes for multi-file edit results
 	#imageComponents: Image[] = [];
 	#imageSpacers: Spacer[] = [];
+	#resultRowTarget: AgentRowTarget | undefined;
 	readonly #instanceId = ++toolExecutionInstanceSeq;
 	#toolName: string;
 	#toolLabel: string;
@@ -782,6 +784,10 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		return this.isTranscriptBlockFinalized() ? undefined : 0;
 	}
 
+	agentIdAtLocalRow(localRow: number): string | undefined {
+		return this.#resultRowTarget?.agentIdAtLocalRow(localRow);
+	}
+
 	/**
 	 * Keeps in-flight TV-wall frames out of immutable native scrollback: the
 	 * `vibe_wait` wall and displaceable snapshots (`hub` waiting polls, `todo`
@@ -957,6 +963,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#renderState.expanded = this.#expanded;
 		this.#renderState.isPartial = this.#isPartial;
 		this.#renderState.spinnerFrame = this.#spinnerFrame;
+		this.#resultRowTarget = undefined;
 
 		// Non-self-framing tools (custom/extension renderers and the generic
 		// fallback) get a padded, state-tinted block — built-ins that draw their
@@ -1181,6 +1188,12 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 									return new Text(theme.fg("toolOutput", replaceTabs(output)), 0, 0);
 								}),
 							);
+							if (!shouldRenderCall) {
+								const target = resultComponent as Partial<AgentRowTarget>;
+								if (typeof target.agentIdAtLocalRow === "function") {
+									this.#resultRowTarget = target as AgentRowTarget;
+								}
+							}
 						}
 					} catch (err) {
 						logger.warn("Tool renderer failed", { tool: this.#toolName, error: String(err) });

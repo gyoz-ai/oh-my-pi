@@ -10,6 +10,7 @@ import { Text } from "@oh-my-pi/pi-tui";
 import type { AsyncJob, AsyncJobManager } from "../../async";
 import { settings } from "../../config/settings";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
+import type { AgentRowTarget } from "../../modes/components/transcript-container";
 import { shimmerEnabled, shimmerText } from "../../modes/theme/shimmer";
 import type { Theme } from "../../modes/theme/theme";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
@@ -516,7 +517,7 @@ export function jobsRenderResult(
 	options: RenderResultOptions,
 	uiTheme: Theme,
 	hubArgs?: HubRenderArgs,
-): Component {
+): Component | (Component & AgentRowTarget) {
 	const args = toJobRenderArgs(hubArgs);
 	let jobs = result.details?.jobs ?? [];
 	const agents = result.details?.agents ?? [];
@@ -595,6 +596,7 @@ export function jobsRenderResult(
 	});
 
 	let cached: RenderCache | undefined;
+	let agentIdsByRow: (string | undefined)[] = [];
 	return {
 		render(width: number): readonly string[] {
 			const expanded = options.expanded;
@@ -609,6 +611,7 @@ export function jobsRenderResult(
 			const key = new Hasher().bool(expanded).u32(width).u32(spinnerFrame).bool(shimmerActive).digest();
 			if (!shimmerActive && cached?.key === key) return cached.lines;
 
+			const rowAgentIds: (string | undefined)[] = [];
 			const itemLines = renderTreeList<JobSnapshot>(
 				{
 					items: sortedJobs,
@@ -616,6 +619,7 @@ export function jobsRenderResult(
 					maxCollapsed: COLLAPSED_LIST_LIMIT,
 					itemType: "job",
 					renderItem: job => {
+						const rowAgentId = job.type === "task" ? job.id : undefined;
 						const lines: string[] = [];
 						const icon = formatStatusIcon(
 							statusToIcon(job.status),
@@ -679,6 +683,7 @@ export function jobsRenderResult(
 								lines.push(`  ${uiTheme.fg(tone, pl)}`);
 							}
 						}
+						for (let i = 0; i < lines.length; i++) rowAgentIds.push(rowAgentId);
 						return lines;
 					},
 				},
@@ -711,11 +716,16 @@ export function jobsRenderResult(
 						);
 
 			const all = [header, ...itemLines, ...agentLines].map(l => truncateToWidth(l, width, Ellipsis.Unicode));
+			while (rowAgentIds.length < itemLines.length) rowAgentIds.push(undefined);
+			agentIdsByRow = [undefined, ...rowAgentIds, ...agentLines.map(() => undefined)];
 			cached = { key, lines: all };
 			return all;
 		},
 		invalidate() {
 			cached = undefined;
+		},
+		agentIdAtLocalRow(localRow: number): string | undefined {
+			return agentIdsByRow[localRow];
 		},
 	};
 }

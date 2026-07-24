@@ -1,7 +1,10 @@
-import { describe, expect, it, type Mock, vi } from "bun:test";
+import { beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import type { TUI } from "@oh-my-pi/pi-tui";
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
@@ -195,6 +198,10 @@ function createContext() {
 }
 
 describe("InputController main-screen mouse click", () => {
+	beforeAll(async () => {
+		await initTheme();
+	});
+
 	it("decodes and consumes SGR mouse bytes without leaking them into the editor", async () => {
 		const { ctx, editor, spies } = createContext();
 		const controller = new InputController(ctx);
@@ -281,5 +288,66 @@ describe("InputController main-screen mouse click", () => {
 
 		expect(spies.focusAgentSession).not.toHaveBeenCalled();
 		expect(spies.showStatus).not.toHaveBeenCalled();
+	});
+
+	it("clicking a settled task row in a job poll block focuses that job's agent", async () => {
+		const { ctx, spies } = createContext();
+		const uiStub = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
+		const jobBlock = new ToolExecutionComponent("hub", { op: "wait" }, {}, undefined, uiStub, process.cwd());
+		jobBlock.updateResult(
+			{
+				content: [{ type: "text", text: "" }],
+				details: {
+					op: "wait",
+					jobs: [
+						{ id: "TaskAgent1", type: "task", status: "completed", label: "TaskAgent1", durationMs: 1_200 },
+						{ id: "bash-1", type: "bash", status: "completed", label: "echo hi", durationMs: 500 },
+					],
+				},
+			},
+			false,
+		);
+		jobBlock.render(120);
+		spies.hitTestScreenRow.mockReturnValue({ component: ctx.chatContainer, localRow: 6 });
+		spies.chatContainerHitTestBlock.mockReturnValue({ component: jobBlock, localRow: 1 });
+		const controller = new InputController(ctx);
+		controller.setupKeyHandlers();
+
+		const listeners = registeredInputListeners(spies.addInputListener);
+		dispatchInput(listeners, sgrPress(3, 5));
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(spies.focusAgentSession).toHaveBeenCalledWith("TaskAgent1");
+	});
+
+	it("clicking a settled bash row in a job poll block is a silent no-op", async () => {
+		const { ctx, spies } = createContext();
+		const uiStub = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
+		const jobBlock = new ToolExecutionComponent("hub", { op: "wait" }, {}, undefined, uiStub, process.cwd());
+		jobBlock.updateResult(
+			{
+				content: [{ type: "text", text: "" }],
+				details: {
+					op: "wait",
+					jobs: [
+						{ id: "TaskAgent1", type: "task", status: "completed", label: "TaskAgent1", durationMs: 1_200 },
+						{ id: "bash-1", type: "bash", status: "completed", label: "echo hi", durationMs: 500 },
+					],
+				},
+			},
+			false,
+		);
+		jobBlock.render(120);
+		spies.hitTestScreenRow.mockReturnValue({ component: ctx.chatContainer, localRow: 6 });
+		spies.chatContainerHitTestBlock.mockReturnValue({ component: jobBlock, localRow: 2 });
+		const controller = new InputController(ctx);
+		controller.setupKeyHandlers();
+
+		const listeners = registeredInputListeners(spies.addInputListener);
+		dispatchInput(listeners, sgrPress(3, 5));
+		await Promise.resolve();
+
+		expect(spies.focusAgentSession).not.toHaveBeenCalled();
 	});
 });
