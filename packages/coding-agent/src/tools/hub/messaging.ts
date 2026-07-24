@@ -10,7 +10,7 @@
  */
 
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
-import { type Component, Text } from "@oh-my-pi/pi-tui";
+import { type Component, Text, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { formatAge, formatDuration } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
@@ -352,7 +352,7 @@ export function executeInbox(
 // =============================================================================
 
 const BODY_LINES_COLLAPSED = 2;
-const BODY_LINES_EXPANDED = 12;
+const BODY_LINES_EXPANDED = 0x7fffffff;
 const BODY_LINE_WIDTH = 100;
 
 const PEER_STATUS_ORDER: Record<string, number> = { running: 0, idle: 1, parked: 2 };
@@ -412,7 +412,7 @@ function bodyLines(
 	const max = expanded ? BODY_LINES_EXPANDED : (options.collapsedLines ?? BODY_LINES_COLLAPSED);
 	const total = body.split("\n").filter(line => line.trim()).length;
 	const quote = theme.fg("dim", theme.md.quoteBorder);
-	const lines = getPreviewLines(body, max, BODY_LINE_WIDTH, Ellipsis.Unicode).map(
+	const lines = getPreviewLines(body, max, expanded ? 0x7fffffff : BODY_LINE_WIDTH, Ellipsis.Unicode).map(
 		line => `${indent}${quote} ${theme.fg(tone, replaceTabs(line))}`,
 	);
 	const hidden = total - Math.min(total, max);
@@ -501,7 +501,9 @@ export function createIrcMessageCard(
 			if (body.trim()) {
 				lines.push(...bodyLines(body, expanded, uiTheme, { indent: "  ", collapsedLines: 3 }));
 			}
-			return lines.map(line => truncateToWidth(line, width, Ellipsis.Unicode));
+			return lines.flatMap(line =>
+				expanded ? wrapTextWithAnsi(line, width) : [truncateToWidth(line, width, Ellipsis.Unicode)],
+			);
 		},
 		{ paddingX: 1 },
 	);
@@ -728,8 +730,8 @@ export function messagingRenderResult(
 	return createCachedComponent(
 		() => options.expanded,
 		(width, expanded) =>
-			buildResultLines(result, details, args, expanded, uiTheme).map(line =>
-				truncateToWidth(line, width, Ellipsis.Unicode),
+			buildResultLines(result, details, args, expanded, uiTheme).flatMap(line =>
+				expanded ? wrapTextWithAnsi(line, width) : [truncateToWidth(line, width, Ellipsis.Unicode)],
 			),
 	);
 }

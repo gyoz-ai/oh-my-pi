@@ -288,3 +288,41 @@ describe("hubToolRenderer body truncation", () => {
 		expect(expanded.some(line => line.includes("more lines"))).toBe(false);
 	});
 });
+
+describe("hubToolRenderer expanded full bodies", () => {
+	it("expanded renders every body line past the old 12-line window", async () => {
+		const uiTheme = await theme();
+		const body = Array.from({ length: 20 }, (_, i) => `reply line ${i + 1}`).join("\n");
+		const details: CoordinationDetails = { op: "wait", from: "Main", waited: msg({ body }) };
+		const result = { content: [{ type: "text", text: "" }], details };
+
+		const expanded = lines(
+			hubToolRenderer.renderResult(result, { expanded: true, isPartial: false }, uiTheme, { op: "wait" }),
+		);
+		expect(expanded.some(line => line.includes("reply line 13"))).toBe(true);
+		expect(expanded.some(line => line.includes("reply line 20"))).toBe(true);
+		expect(expanded.some(line => line.includes("more lines"))).toBe(false);
+	});
+
+	it("expanded wraps long lines to the render width instead of truncating", async () => {
+		const uiTheme = await theme();
+		const body = `${"alpha bravo charlie ".repeat(8)}TAIL-END`;
+		const details: CoordinationDetails = { op: "wait", from: "Main", waited: msg({ body }) };
+		const result = { content: [{ type: "text", text: "" }], details };
+
+		const collapsed = lines(
+			hubToolRenderer.renderResult(result, { expanded: false, isPartial: false }, uiTheme, { op: "wait" }),
+			60,
+		);
+		expect(collapsed.some(line => line.includes("TAIL-END"))).toBe(false);
+
+		const expanded = lines(
+			hubToolRenderer.renderResult(result, { expanded: true, isPartial: false }, uiTheme, { op: "wait" }),
+			60,
+		);
+		expect(expanded.some(line => line.includes("TAIL-END"))).toBe(true);
+		for (const line of expanded) {
+			expect(Bun.stringWidth(line)).toBeLessThanOrEqual(60);
+		}
+	});
+});
